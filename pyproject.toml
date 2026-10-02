@@ -1,0 +1,27 @@
+[project]
+name = "duneradgeo"
+version = "0.1.0"
+description = "Inspect DUNE background sources: detector geometry (GDML) and radiological volumes (FHiCL)"
+readme = "README.md"
+authors = [
+    { name = "Alessandro Thea", email = "alessandro.thea@cern.ch" }
+]
+requires-python = ">=3.9"
+dependencies = [
+    "numpy",
+    "matplotlib",
+    "plotly",
+    "jupyter",
+    "nbconvert",
+]
+
+[project.scripts]
+bki-extract = "duneradgeo.extract:main"
+bki-plot    = "duneradgeo.plot:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/duneradgeo"]
