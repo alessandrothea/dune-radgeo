@@ -25,7 +25,8 @@ from pathlib import Path
 import numpy as np
 
 from ._draw import box_corners_world
-from ._fcl import FhiclParser, expand_fcl, producer_volumes, select_producers
+from ._fcl import (FhiclParser, default_fcl_cache_dir, expand_fcl,
+                   producer_volumes, select_producers)
 from ._gdml import GDMLGeometry
 from ._profiles import detect_profile, get_profile
 from ._search import gdml_from_fcl, resolve_search_path
@@ -89,18 +90,28 @@ def _gdml_volumes(gdml_path: Path,
 # FCL → radio VolumeEntry list
 # ---------------------------------------------------------------------------
 
-def _fcl_radio_volumes(fcl_path: Path,
+def _parse_fcl(fcl_path: Path, cache_dir: str | None = None) -> tuple[dict, list]:
+    """Expand (via fhicl-dump or inline includes) and parse a FCL once.
+
+    Returns (doc, top_order) so callers can reuse the parsed document instead
+    of re-running the expensive expansion step.  When `cache_dir` is given the
+    expanded text is persisted there and reused by later invocations.
+    """
+    print(f"[info] parsing FCL {fcl_path.name} …", file=sys.stderr)
+    parser = FhiclParser(expand_fcl(str(fcl_path), cache_dir=cache_dir))
+    doc    = parser.parse()
+    return doc, parser.order
+
+
+def _fcl_radio_volumes(doc: dict,
+                       top_order: list,
                        geo: GDMLGeometry | None = None,
                        prefix: str = "",
                        all_configured: bool = False,
                        select_re: str | None = None,
                        containment: float = 0.99) -> list[VolumeEntry]:
-    print(f"[info] parsing FCL {fcl_path.name} …", file=sys.stderr)
-    expanded = expand_fcl(str(fcl_path))
-    parser   = FhiclParser(expanded)
-    doc      = parser.parse()
-
-    table, labels = select_producers(doc, parser.order,
+    """Build radio VolumeEntry rows from an already-parsed FCL document."""
+    table, labels = select_producers(doc, top_order,
                                      prefix=prefix,
                                      all_configured=all_configured,
                                      select_re=select_re)
@@ -124,7 +135,7 @@ def _fcl_radio_volumes(fcl_path: Path,
             ext = hi_a - lo_a
             rot = np.eye(3)
             meta = {k: r.get(k) for k in
-                    ("source", "nuclide", "module_type", "BqPercc",
+                    ("source", "node", "nuclide", "module_type", "BqPercc",
                      "rate", "surface", "T0", "T1", "distrib_x", "x_eff")
                     if r.get(k) is not None}
             meta["index"] = r["index"]
@@ -166,6 +177,11 @@ def main() -> None:
                     help="skip GDML parsing even when a FCL is given")
     ap.add_argument("--gdml",           default=None,
                     help="override GDML path (when input is FCL)")
+    ap.add_argument("--fcl-cache",      default=default_fcl_cache_dir(), metavar="DIR",
+                    help="directory where expanded FCL files are cached and "
+                         "reused across runs (default: %(default)s)")
+    ap.add_argument("--no-fcl-cache",   action="store_true",
+                    help="always re-run the FCL expansion, ignoring the cache")
     ap.add_argument("--verbose", "-v",  action="store_true")
     args = ap.parse_args()
 
@@ -183,7 +199,14 @@ def main() -> None:
     detector_key = ""
     source       = str(inp)
 
-    # ---- Resolve GDML path (needed before FCL parsing for volume_rand/gen) ----
+    # ---- Expand + parse the FCL exactly once (fhicl-dump is expensive) ----
+    fcl_doc:   dict | None = None
+    fcl_order: list        = []
+    if is_fcl:
+        cache_dir = None if args.no_fcl_cache else args.fcl_cache
+        fcl_doc, fcl_order = _parse_fcl(inp, cache_dir=cache_dir)
+
+    # ---- Resolve GDML path (needed before radio extraction for volume_rand/gen) ----
     gdml_path: Path | None = None
     if not args.no_geometry:
         if args.gdml:
@@ -193,8 +216,7 @@ def main() -> None:
                 if gdml_path is None:
                     sys.exit(f"[error] --gdml '{args.gdml}' not found")
         elif is_fcl:
-            doc  = FhiclParser(expand_fcl(str(inp))).parse()
-            name = gdml_from_fcl(doc)
+            name = gdml_from_fcl(fcl_doc)
             if name:
                 gdml_path = resolve_search_path(name)
                 if gdml_path is None:
@@ -225,7 +247,7 @@ def main() -> None:
     # ---- FCL input: radio volumes (geo available for volume_rand/gen) ----
     if is_fcl:
         entries += _fcl_radio_volumes(
-            inp,
+            fcl_doc, fcl_order,
             geo=geo,
             prefix=args.prefix,
             all_configured=args.all_configured,

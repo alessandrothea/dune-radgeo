@@ -20,7 +20,36 @@ def _has_includes(text: str) -> bool:
     return bool(_INCLUDE_RE.search(text))
 
 
-def expand_fcl(path: str, search_var: str = "FHICL_FILE_PATH") -> str:
+def default_fcl_cache_dir() -> str:
+    """``$XDG_CACHE_HOME/bki-extract/fcl`` (default ``~/.cache/bki-extract/fcl``)."""
+    base = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+    return os.path.join(base, "bki-extract", "fcl")
+
+
+def _cache_file(path: str, search_var: str, cache_dir: str) -> str:
+    """
+    Cache file name for the expanded form of `path`.
+
+    The key covers the resolved path, its size/mtime and the include search
+    path, so editing or moving the top-level file or changing
+    $FHICL_FILE_PATH invalidates the entry.  Changes to *included* files are
+    not detected: use ``--no-fcl-cache`` (or delete the entry) in that case.
+    """
+    import hashlib
+    st  = os.stat(path)
+    key = "\0".join([
+        os.path.realpath(path),
+        str(st.st_size),
+        str(st.st_mtime_ns),
+        os.environ.get(search_var, ""),
+    ])
+    h = hashlib.sha1(key.encode()).hexdigest()[:16]
+    stem = os.path.splitext(os.path.basename(path))[0]
+    return os.path.join(cache_dir, f"{stem}.{h}.expanded.fcl")
+
+
+def expand_fcl(path: str, search_var: str = "FHICL_FILE_PATH",
+               cache_dir: str | None = None) -> str:
     """
     Return the fully expanded text of a FHiCL file.
 
@@ -32,6 +61,10 @@ def expand_fcl(path: str, search_var: str = "FHICL_FILE_PATH") -> str:
 
     Files without any ``#include`` are returned as-is without spawning a
     subprocess.
+
+    When `cache_dir` is given, the expanded text is stored there (see
+    :func:`_cache_file`) and reused on later runs so the expensive
+    expansion step is skipped.
     """
     with open(path) as fh:
         text = fh.read()
@@ -39,10 +72,34 @@ def expand_fcl(path: str, search_var: str = "FHICL_FILE_PATH") -> str:
     if not _has_includes(text):
         return text   # nothing to expand
 
+    bname = os.path.basename(path)
+
+    # -- cached expansion from a previous run --------------------------------
+    cpath = _cache_file(path, search_var, cache_dir) if cache_dir else None
+    if cpath and os.path.isfile(cpath):
+        print(f"[info] using cached expansion of '{bname}': {cpath}", file=sys.stderr)
+        with open(cpath) as fh:
+            return fh.read()
+
+    expanded = _expand_fcl_uncached(path, text, bname, search_var)
+
+    if cpath:
+        try:
+            os.makedirs(cache_dir, exist_ok=True)
+            tmp = cpath + ".tmp"
+            with open(tmp, "w") as fh:
+                fh.write(expanded)
+            os.replace(tmp, cpath)
+            print(f"[info] cached expansion → {cpath}", file=sys.stderr)
+        except OSError as exc:
+            print(f"[warn] could not write FCL cache ({exc})", file=sys.stderr)
+    return expanded
+
+
+def _expand_fcl_uncached(path: str, text: str, bname: str, search_var: str) -> str:
     # -- try fhicl-dump first ------------------------------------------------
     import shutil
     import subprocess
-    bname = os.path.basename(path)
     if shutil.which("fhicl-dump"):
         print(f"[info] expanding '{bname}' with fhicl-dump …", file=sys.stderr)
         try:
@@ -57,7 +114,7 @@ def expand_fcl(path: str, search_var: str = "FHICL_FILE_PATH") -> str:
                   file=sys.stderr)
 
     # -- inline fallback -----------------------------------------------------
-    print(f"[info] expanding '{bname}' via $FHICL_FILE_PATH …", file=sys.stderr)
+    print(f"[info] expanding '{bname}' via ${search_var} …", file=sys.stderr)
     expanded = _preprocess_fcl(text, search_var=search_var)
     print(f"[info] expansion done", file=sys.stderr)
     return expanded

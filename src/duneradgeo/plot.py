@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -43,6 +44,118 @@ _STRUCT_PALETTE: dict[str, tuple] = {
 }
 _STRUCT_DEFAULT = ("#BDBDBD", 0.08)
 
+# Per-surface colours used when individual radio surfaces are selected;
+# above this many groups the colouring collapses to one colour per producer.
+_SURFACE_PALETTE = ("tab:red", "tab:blue", "tab:green", "tab:purple",
+                    "tab:brown", "tab:pink", "tab:olive", "tab:cyan",
+                    "tab:orange", "tab:gray")
+_MAX_SURFACE_GROUPS = 20
+
+
+# ---------------------------------------------------------------------------
+# Volume selection
+# ---------------------------------------------------------------------------
+
+def _parse_index_list(sel: str) -> set[int]:
+    """'0,2,5-7' → {0, 2, 5, 6, 7}."""
+    out: set[int] = set()
+    for tok in sel.split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        a, sep, b = tok.partition("-")
+        if sep:
+            out.update(range(int(a), int(b) + 1))
+        else:
+            out.add(int(a))
+    return out
+
+
+def parse_surface_spec(spec: str) -> tuple:
+    """
+    Parse a ``PRODUCER_RE#SEL`` surface selector.
+
+    ``SEL`` is either an index list (``0,2,5-7``) or ``@REGEX`` matched
+    against the surface label, geometry node and nuclide.
+
+    Returns (producer_re, indices | None, match_re | None).
+    """
+    prod, sep, sel = spec.rpartition("#")
+    if not sep or not prod or not sel:
+        raise ValueError(f"bad surface spec '{spec}' (expected PRODUCER_RE#SEL)")
+    if sel.startswith("@"):
+        return re.compile(prod), None, re.compile(sel[1:])
+    try:
+        return re.compile(prod), _parse_index_list(sel), None
+    except ValueError:
+        raise ValueError(f"bad index list '{sel}' in surface spec '{spec}'") from None
+
+
+def _surface_selected(v: VolumeEntry, specs: list[tuple]) -> bool:
+    applicable = [s for s in specs if s[0].search(v.name)]
+    if not applicable:
+        return True          # producers not named by any spec are untouched
+    m = v.meta
+    for _, indices, match in applicable:
+        if indices is not None and m.get("index") in indices:
+            return True
+        if match is not None and any(
+                match.search(str(m[k])) for k in ("surface", "node", "nuclide")
+                if m.get(k) is not None):
+            return True
+    return False
+
+
+def select_volumes(
+    ir: IRCollection,
+    kinds: list[str] | None = None,
+    name_patterns: list[str] | None = None,
+    kind_patterns: dict[str, list[str]] | None = None,
+    surfaces: list[str] | None = None,
+) -> list[VolumeEntry]:
+    """
+    Apply the bki-plot selectors to ``ir.volumes`` (see :func:`plot_ir`).
+    """
+
+    vols = ir.volumes
+    if kinds is not None:
+        kind_set = set(kinds)
+        vols = [v for v in vols if v.kind in kind_set]
+    if name_patterns:
+        pats = [re.compile(p) for p in name_patterns]
+        vols = [v for v in vols if any(p.search(v.name) for p in pats)]
+    if kind_patterns:
+        compiled = {k: [re.compile(p) for p in ps]
+                    for k, ps in kind_patterns.items()}
+        vols = [v for v in vols
+                if v.kind not in compiled
+                or any(p.search(v.name) for p in compiled[v.kind])]
+    if surfaces:
+        specs = [parse_surface_spec(s) for s in surfaces]
+        vols = [v for v in vols
+                if v.kind != "radio" or _surface_selected(v, specs)]
+    return vols
+
+
+def _world_bounds(vols: list[VolumeEntry], pad_frac: float = 0.03) -> tuple:
+    """
+    Padded world-frame (lo, hi) [x, y, z] enclosing all corners of `vols`,
+    or (None, None) when empty.  The 2D views draw projections of these same
+    corners, so the box also encloses every drawn 2D polygon.
+    """
+    if not vols:
+        return None, None
+    arr = np.vstack([box_corners_world(v.pos, v.ext, v.rot) for v in vols])
+    lo, hi = arr.min(axis=0), arr.max(axis=0)
+    pad = pad_frac * np.maximum(hi - lo, 1.0)
+    return lo - pad, hi + pad
+
+
+def _surface_tag(v: VolumeEntry) -> str:
+    """'producer#idx' for radio entries, plain name otherwise."""
+    idx = v.meta.get("index")
+    return f"{v.name}#{idx}" if v.kind == "radio" and idx is not None else v.name
+
 
 # ---------------------------------------------------------------------------
 # Core plotting function (importable from notebooks etc.)
@@ -56,6 +169,8 @@ def plot_ir(
     kinds: list[str] | None = None,
     name_patterns: list[str] | None = None,
     kind_patterns: dict[str, list[str]] | None = None,
+    surfaces: list[str] | None = None,
+    proportional: bool = True,
 ) -> None:
     """
     Render an IRCollection to a PDF/PNG file.
@@ -72,32 +187,27 @@ def plot_ir(
         "struct": ["volGaseousArgon"]}``.  For each kind present in this
         dict only volumes whose name matches at least one pattern are kept;
         kinds absent from the dict are left unfiltered.
+    surfaces : list of str, optional
+        Radio generation-surface selectors ``PRODUCER_RE#SEL``, where SEL is
+        an index list (``0,2,5-7``, matched against ``meta.index``) or
+        ``@REGEX`` (matched against ``meta.surface``, ``meta.node`` and
+        ``meta.nuclide``).  Only producers matched by some spec are
+        narrowed.  When given, each selected surface gets its own colour.
+    proportional : bool, optional
+        Draw the 2D views to scale (1 cm == 1 cm on both axes; default).
+        When False each 2D panel is stretched to fill its grid cell.
 
     Axes convention: x = drift, y = vertical, z = beam.
     The 3D axes are re-ordered as (z, x, y) to match the original script.
     """
-    import re as _re
-
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.patches import Polygon as MplPolygon
     from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
-    # ---- apply filters ----
-    vols = ir.volumes
-    if kinds is not None:
-        kind_set = set(kinds)
-        vols = [v for v in vols if v.kind in kind_set]
-    if name_patterns:
-        pats = [_re.compile(p) for p in name_patterns]
-        vols = [v for v in vols if any(p.search(v.name) for p in pats)]
-    if kind_patterns:
-        compiled = {k: [_re.compile(p) for p in ps]
-                    for k, ps in kind_patterns.items()}
-        vols = [v for v in vols
-                if v.kind not in compiled
-                or any(p.search(v.name) for p in compiled[v.kind])]
+    vols = select_volumes(ir, kinds=kinds, name_patterns=name_patterns,
+                          kind_patterns=kind_patterns, surfaces=surfaces)
 
     filtered = IRCollection(source=ir.source, detector=ir.detector, volumes=vols)
 
@@ -145,10 +255,12 @@ def plot_ir(
                                           label=vname if k == 0 else "_", zorder=1))
 
     # ---- generic box-drawing helper ----
-    def _draw_boxes(vols: list[VolumeEntry], col: str, label_pfx: str, zorder3d: int):
+    def _draw_boxes(vols: list[VolumeEntry], col: str, label_pfx: str, zorder3d: int,
+                    show_count: bool = True):
         for i, v in enumerate(vols):
             corners   = box_corners_world(v.pos, v.ext, v.rot)
-            lbl       = f"{label_pfx} ({len(vols)})" if i == 0 else "_"
+            lbl       = (f"{label_pfx} ({len(vols)})" if show_count else label_pfx) \
+                        if i == 0 else "_"
             faces_3d  = [[[corners[j][2], corners[j][0], corners[j][1]]
                            for j in fi] for fi in BOX_FACES]
             ax3.add_collection3d(Poly3DCollection(
@@ -166,16 +278,26 @@ def plot_ir(
 
     _draw_boxes(anodes, _ANODE_COL, "Anodes",    zorder3d=3)
     _draw_boxes(opdets, _OPDET_COL, "Opt. det.", zorder3d=4)
-    _draw_boxes(radios, _RADIO_COL, "Radio vol.", zorder3d=2)
+    if surfaces and radios:
+        # one colour per selected surface (producer#index), or per producer
+        # when there are too many surfaces for a readable legend
+        groups: dict[str, list[VolumeEntry]] = defaultdict(list)
+        for v in radios:
+            groups[_surface_tag(v)].append(v)
+        if len(groups) > _MAX_SURFACE_GROUPS:
+            groups = defaultdict(list)
+            for v in radios:
+                groups[v.name].append(v)
+        per_surface = all(len(g) == 1 for g in groups.values())
+        for k, (lbl, gvols) in enumerate(groups.items()):
+            _draw_boxes(gvols, _SURFACE_PALETTE[k % len(_SURFACE_PALETTE)],
+                        lbl, zorder3d=2, show_count=not per_surface)
+    else:
+        _draw_boxes(radios, _RADIO_COL, "Radio vol.", zorder3d=2)
 
-    # ---- axis limits (based on anode+opdet corners) ----
-    ref_vols = anodes + opdets or structs or radios
-    all_corners = [box_corners_world(v.pos, v.ext, v.rot) for v in ref_vols]
-    if all_corners:
-        arr = np.vstack(all_corners)
-        lo, hi = arr.min(axis=0), arr.max(axis=0)
-        pad = 0.03 * np.maximum(hi - lo, 1.0)
-        lo, hi = lo - pad, hi + pad
+    # ---- axis limits (enclose every drawn volume) ----
+    lo, hi = _world_bounds(anodes + opdets + structs + radios)
+    if lo is not None:
         span = hi - lo
         ax3.set_xlim(lo[2], hi[2])
         ax3.set_ylim(lo[0], hi[0])
@@ -188,16 +310,23 @@ def plot_ir(
     ax3.set_title("3D (ortho, proportional)")
     ax3.legend(fontsize=7, loc="upper right", frameon=False)
 
-    for ax2d, xl, yl, ttl in (
-        (ax_zy, "z (beam) [cm]",  "y (vert) [cm]",  "Z–Y  (beam face)"),
-        (ax_zx, "z (beam) [cm]",  "x (drift) [cm]", "Z–X  (top view)"),
-        (ax_xy, "x (drift) [cm]", "y (vert) [cm]",  "X–Y  (side view)"),
+    # All 2D views share the same world bounding box, so matching axes line
+    # up across panels; when proportional they are also drawn to scale
+    # (1 cm == 1 cm on both axes), otherwise they fill their grid cell.
+    for ax2d, ah, av, xl, yl, ttl in (
+        (ax_zy, 2, 1, "z (beam) [cm]",  "y (vert) [cm]",  "Z–Y  (beam face)"),
+        (ax_zx, 2, 0, "z (beam) [cm]",  "x (drift) [cm]", "Z–X  (top view)"),
+        (ax_xy, 0, 1, "x (drift) [cm]", "y (vert) [cm]",  "X–Y  (side view)"),
     ):
         ax2d.set_xlabel(xl); ax2d.set_ylabel(yl); ax2d.set_title(ttl)
-        ax2d.autoscale()
+        if lo is not None:
+            ax2d.set_xlim(lo[ah], hi[ah])
+            ax2d.set_ylim(lo[av], hi[av])
+        else:
+            ax2d.autoscale()
+        ax2d.set_aspect("equal" if proportional else "auto", adjustable="box")
         ax2d.legend(fontsize=7, frameon=False)
         ax2d.grid(True, alpha=0.25)
-    ax_zy.set_aspect("equal")
 
     fig.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
@@ -221,23 +350,32 @@ def _print_list(volumes: list) -> None:
     for kind in sorted(names_by_kind):
         print(f"{kind}  ({counts[kind]} placements)")
         for name in names_by_kind[kind]:
-            n = sum(1 for v in volumes if v.kind == kind and v.name == name)
-            print(f"  {name}  ({n})")
+            vs = [v for v in volumes if v.kind == kind and v.name == name]
+            print(f"  {name}  ({len(vs)})")
+            if kind == "radio":
+                # one line per generation surface, for use with --surface
+                for v in vs:
+                    m = v.meta
+                    print(f"    #{m.get('index', '?'):<4}"
+                          f" {m.get('surface', '-'):<22}"
+                          f" {m.get('nuclide') or '-':<16}"
+                          f" {m.get('node') or m.get('source', '-')}")
 
 
 def _print_list_detail(volumes: list) -> None:
     """One line per placement: kind, name, and world-frame x/y/z ranges."""
     from ._draw import box_corners_world
     # header
-    print(f"{'#':>5}  {'kind':<8}  {'name':<44}"
+    print(f"{'#':>5}  {'kind':<8}  {'name':<44}  {'surface':<22}"
           f"  {'x_min':>10}  {'x_max':>10}"
           f"  {'y_min':>10}  {'y_max':>10}"
           f"  {'z_min':>10}  {'z_max':>10}  cm")
-    print("-" * 130)
+    print("-" * 154)
     for idx, v in enumerate(volumes):
         corners = box_corners_world(v.pos, v.ext, v.rot)
         lo, hi  = corners.min(axis=0), corners.max(axis=0)
-        print(f"{idx:5d}  {v.kind:<8}  {v.name:<44}"
+        print(f"{idx:5d}  {v.kind:<8}  {_surface_tag(v):<44}"
+              f"  {v.meta.get('surface', ''):<22}"
               f"  {lo[0]:10.3f}  {hi[0]:10.3f}"
               f"  {lo[1]:10.3f}  {hi[1]:10.3f}"
               f"  {lo[2]:10.3f}  {hi[2]:10.3f}")
@@ -254,7 +392,9 @@ def main() -> None:
     )
     ap.add_argument("ir_file", help="JSON IR produced by bki-extract")
     ap.add_argument("--list", "-l", action="store_true",
-                    help="print volume kinds and names grouped by kind, then exit")
+                    help="print volume kinds and names grouped by kind (radio "
+                         "producers with one line per surface), then exit "
+                         "(respects selectors)")
     ap.add_argument("--list-detail", "-L", action="store_true",
                     help="print every placement with pos, ext and 8 world-frame "
                          "corner coordinates, then exit (respects selectors)")
@@ -265,6 +405,11 @@ def main() -> None:
                     help="3D view elevation and azimuth in degrees (default: 20 -60)")
     ap.add_argument("--title", default=None,
                     help="plot title (default: derived from IR source)")
+    ap.add_argument("--proportional", action=argparse.BooleanOptionalAction,
+                    default=True,
+                    help="draw the 2D views to scale (1 cm == 1 cm on both "
+                         "axes); --no-proportional stretches each view to "
+                         "fill its panel (default: proportional)")
     # ---- volume selectors ----
     grp = ap.add_argument_group("volume selectors")
     grp.add_argument("--no-detector", action="store_true",
@@ -278,7 +423,7 @@ def main() -> None:
     grp.add_argument("--name", nargs="+", default=None,
                      metavar="PATTERN",
                      help="show only volumes whose name matches at least one "
-                          "regex across all kinds (re.search, applied last)")
+                          "regex across all kinds (re.search)")
     grp.add_argument("--anode", nargs="+", default=None, metavar="PATTERN",
                      help="regex filter on anode volume names")
     grp.add_argument("--opdet", nargs="+", default=None, metavar="PATTERN",
@@ -287,6 +432,12 @@ def main() -> None:
                      help="regex filter on struct volume names")
     grp.add_argument("--radio", nargs="+", default=None, metavar="PATTERN",
                      help="regex filter on radio producer names")
+    grp.add_argument("--surface", nargs="+", default=None, metavar="SPEC",
+                     help="radio generation-surface selector PRODUCER_RE#SEL; "
+                          "SEL is an index list (0,2,5-7) or @REGEX matched "
+                          "against surface label, node and nuclide.  Producers "
+                          "not matched by any spec are left unfiltered; "
+                          "selected surfaces are coloured individually")
     args = ap.parse_args()
 
     ir_path = Path(args.ir_file)
@@ -299,10 +450,6 @@ def main() -> None:
 
     ir = IRCollection.load(ir_path)
     print(f"[info] loaded {len(ir.volumes)} volumes from {ir_path.name}", file=sys.stderr)
-
-    if args.list:
-        _print_list(ir.volumes)
-        sys.exit(0)
 
     # build effective kinds list from coarse + fine selectors
     _DET_KINDS   = {"anode", "opdet", "struct"}
@@ -334,27 +481,25 @@ def main() -> None:
         if flag:
             kind_patterns[kind] = flag
 
-    if args.list_detail:
-        # apply the same filters as the plot would, then print detail
-        import re as _re
-        vols = ir.volumes
-        if kinds is not None:
-            vols = [v for v in vols if v.kind in set(kinds)]
-        if args.name:
-            pats = [_re.compile(p) for p in args.name]
-            vols = [v for v in vols if any(p.search(v.name) for p in pats)]
-        if kind_patterns:
-            compiled = {k: [_re.compile(p) for p in ps]
-                        for k, ps in kind_patterns.items()}
-            vols = [v for v in vols
-                    if v.kind not in compiled
-                    or any(p.search(v.name) for p in compiled[v.kind])]
-        _print_list_detail(vols)
+    if args.surface:
+        for spec in args.surface:
+            try:
+                parse_surface_spec(spec)
+            except (ValueError, re.error) as exc:
+                sys.exit(f"[error] --surface: {exc}")
+
+    if args.list or args.list_detail:
+        # same filters as the plot would apply
+        vols = select_volumes(ir, kinds=kinds, name_patterns=args.name,
+                              kind_patterns=kind_patterns or None,
+                              surfaces=args.surface)
+        (_print_list_detail if args.list_detail else _print_list)(vols)
         sys.exit(0)
 
     plot_ir(ir, out_path, title=title, view=tuple(args.view),
             kinds=kinds, name_patterns=args.name,
-            kind_patterns=kind_patterns or None)
+            kind_patterns=kind_patterns or None,
+            surfaces=args.surface, proportional=args.proportional)
 
 
 if __name__ == "__main__":
