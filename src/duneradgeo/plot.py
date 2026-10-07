@@ -293,6 +293,10 @@ def main() -> None:
     if not ir_path.is_file():
         sys.exit(f"[error] '{args.ir_file}' not found")
 
+    if ir_path.suffix.lower() != ".json":
+        sys.exit(f"[error] '{ir_path.name}' is not a JSON IR file — "
+                 f"run bki-extract first to produce one")
+
     ir = IRCollection.load(ir_path)
     print(f"[info] loaded {len(ir.volumes)} volumes from {ir_path.name}", file=sys.stderr)
 
