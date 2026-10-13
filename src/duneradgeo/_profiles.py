@@ -6,6 +6,8 @@ PROFILES: dict[str, dict] = {
         "label": "VD (Vertical Drift)",
         "anode_patterns":  [r"^volAnodePlate$", r"^volAnodePlateBottom$"],
         "opdet_patterns":  [r"^volArapuca"],
+        # v5+ name; v4 geometries call the same CathodeGrid solid volGroundGrid
+        "cathode_patterns": [r"^volCathodeGrid$", r"^volGroundGrid$"],
         "struct_patterns": [r"^volTPCActive$", r"^volGaseousArgon$",
                             r"^volTPC$", r"^volCryostat$"],
         "hint_vols": {"volAnodePlate"},
@@ -14,6 +16,7 @@ PROFILES: dict[str, dict] = {
         "label": "HD (Horizontal Drift / APA)",
         "anode_patterns":  [r"^volAPAFrameYSide$"],
         "opdet_patterns":  [r"^volArapuca_\d"],
+        "cathode_patterns": [],   # no HD reference GDML checked yet
         "struct_patterns": [r"^volTPCActiveInner$", r"^volGaseousArgon$",
                             r"^volTPC$", r"^volCryostat$"],
         "hint_vols": {"volAPAFrameYSide"},
@@ -24,6 +27,7 @@ _GENERIC_PROFILE: dict = {
     "label": "DUNE (generic)",
     "anode_patterns":  [r"volAnode|volCRM$|APAFrame"],
     "opdet_patterns":  [r"volOpDetSensitive|volArapuca"],
+    "cathode_patterns": [r"^volCathodeGrid$", r"^volGroundGrid$"],
     "struct_patterns": [r"volTPCActive$", r"volGaseousArgon$",
                         r"^volTPC$", r"^volCryostat$"],
 }

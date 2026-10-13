@@ -12,7 +12,7 @@ import numpy as np
 @dataclass
 class VolumeEntry:
     """One placed detector or radiological volume in world coordinates."""
-    kind: str          # "anode" | "opdet" | "struct" | "radio"
+    kind: str          # "anode" | "opdet" | "cathode" | "struct" | "radio"
     name: str          # logical-volume or producer name
     pos:  np.ndarray   # (3,) world-frame centre [cm]
     ext:  np.ndarray   # (3,) full extents dx,dy,dz [cm]

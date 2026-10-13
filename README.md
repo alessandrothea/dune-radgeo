@@ -2,8 +2,8 @@
 
 Inspect DUNE background sources without a LArSoft environment:
 
-- **detector geometry** — anode (CRP/APA), optical detector, and structural volume
-  positions from GDML files
+- **detector geometry** — anode (CRP/APA), optical detector, cathode, and
+  structural volume positions from GDML files
 - **radiological volumes** — emission boxes from RadioGen / Decay0Gen FHiCL
   configurations
 
@@ -112,6 +112,7 @@ bki-extract <input> --out <ir.json>
 
   --anode-pattern P   regex(es) for anode volume names   (auto-detected)
   --opdet-pattern P   regex(es) for opdet volume names   (auto-detected)
+  --cathode-pattern P regex(es) for cathode volume names (auto-detected, VD only)
   --struct-pattern P  regex(es) for structural volumes   (auto-detected)
   --struct VOLNAME    exact structural volume names (anchored, overrides --struct-pattern)
 
@@ -147,11 +148,12 @@ bki-plot <ir.json> [--out <file.pdf>]
                       auto: vd for VD IRs, hd otherwise
 
 volume selectors (applied in order):
-  --no-detector       exclude anode / opdet / struct volumes
+  --no-detector       exclude anode / opdet / cathode / struct volumes
   --no-radio          exclude radio volumes
-  --kind K [K …]      keep only these kinds: anode opdet struct radio
+  --kind K [K …]      keep only these kinds: anode opdet cathode struct radio
   --anode P [P …]     regex filter on anode volume names
   --opdet P [P …]     regex filter on opdet volume names
+  --cathode P [P …]   regex filter on cathode volume names
   --struct P [P …]    regex filter on struct volume names
   --radio P [P …]     regex filter on radio producer names
   --name P [P …]      cross-kind name regex
@@ -216,6 +218,9 @@ bki-plot radio.json --no-radio --title "FD2 VD geometry" --view 30 -45 -o geomet
 
 # anodes and active volume only
 bki-plot radio.json --kind anode struct --struct '^volTPCActive$' -o tpc.pdf
+
+# drift geometry: anode and cathode planes
+bki-plot geo.json --kind anode cathode --orientation auto -o drift.pdf
 
 # Vertical Drift: drift axis x drawn vertically ("auto" picks it for VD IRs)
 bki-plot radio.json --orientation vd -o radio_vd.pdf
@@ -323,7 +328,7 @@ the form `PRODUCER_RE#SEL`:
 
 | Field  | Description |
 |--------|-------------|
-| `kind` | `anode`, `opdet`, `struct`, or `radio` |
+| `kind` | `anode`, `opdet`, `cathode`, `struct`, or `radio` |
 | `pos`  | world-frame centre `[x, y, z]` in cm |
 | `ext`  | full extents `[dx, dy, dz]` in cm |
 | `rot`  | 3×3 world-frame rotation matrix |
@@ -384,12 +389,17 @@ from duneradgeo._fcl import expand_fcl
 
 Auto-detected from logical volume names:
 
-| Key  | Geometry | Anode | Opdet | Default struct |
-|------|----------|-------|-------|----------------|
-| `vd` | Vertical Drift (FD2) | `volAnodePlate`, `volAnodePlateBottom` | `volArapuca*` | `volTPCActive`, `volGaseousArgon`, `volTPC`, `volCryostat` |
-| `hd` | Horizontal Drift / ProtoDUNE-HD | `volAPAFrameYSide` | `volArapuca_N` | `volTPCActiveInner`, `volGaseousArgon`, `volTPC`, `volCryostat` |
+| Key  | Geometry | Anode | Opdet | Cathode | Default struct |
+|------|----------|-------|-------|---------|----------------|
+| `vd` | Vertical Drift (FD2) | `volAnodePlate`, `volAnodePlateBottom` | `volArapuca*` | `volCathodeGrid` (`volGroundGrid` in v4) | `volTPCActive`, `volGaseousArgon`, `volTPC`, `volCryostat` |
+| `hd` | Horizontal Drift / ProtoDUNE-HD | `volAPAFrameYSide` | `volArapuca_N` | — | `volTPCActiveInner`, `volGaseousArgon`, `volTPC`, `volCryostat` |
 
-Override with `--anode-pattern` / `--opdet-pattern` / `--struct-pattern`.
+Override with `--anode-pattern` / `--opdet-pattern` / `--cathode-pattern` /
+`--struct-pattern`.
+
+The VD cathode solid is a box with 16 holes cut out (a GDML subtraction);
+it is drawn as its outer box.  The cathode-mounted photon detectors
+(`volArapucaCathode`) stay in the `opdet` kind.
 
 ---
 

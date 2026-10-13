@@ -11,7 +11,7 @@ If a FCL file is given:
   * #include directives are resolved automatically via $FHICL_FILE_PATH
   * radiological producers (RadioGen / Decay0Gen) → kind="radio" volumes
   * the GDML filename is extracted from AuxDetGeometry.GDML and used to
-    populate anode / opdet / struct volumes as well.
+    populate anode / opdet / cathode / struct volumes as well.
 
 Output is a JSON file readable by bki-plot and the nb_B notebook.
 """
@@ -41,6 +41,7 @@ def _gdml_volumes(gdml_path: Path,
                   anode_pats: list[str] | None,
                   opdet_pats: list[str] | None,
                   struct_pats: list[str] | None,
+                  cathode_pats: list[str] | None = None,
                   verbose: bool = False) -> tuple[list[VolumeEntry], str, GDMLGeometry]:
     """Parse a GDML and return (entries, detector_key, geo)."""
     print(f"[info] parsing {gdml_path.name} …", file=sys.stderr)
@@ -58,6 +59,7 @@ def _gdml_volumes(gdml_path: Path,
 
     ap = anode_pats  or prof["anode_patterns"]
     op = opdet_pats  or prof["opdet_patterns"]
+    cp = cathode_pats or prof.get("cathode_patterns", [])
     sp = struct_pats or prof.get("struct_patterns", [])
 
     entries: list[VolumeEntry] = []
@@ -80,6 +82,8 @@ def _gdml_volumes(gdml_path: Path,
 
     _collect(ap, "anode")
     _collect(op, "opdet")
+    if cp:
+        _collect(cp, "cathode")
     if sp:
         _collect(sp, "struct")
 
@@ -161,6 +165,7 @@ def main() -> None:
     # geometry patterns
     ap.add_argument("--anode-pattern",  nargs="+", default=None)
     ap.add_argument("--opdet-pattern",  nargs="+", default=None)
+    ap.add_argument("--cathode-pattern", nargs="+", default=None)
     ap.add_argument("--struct-pattern", nargs="+", default=None)
     ap.add_argument("--struct", nargs="+", default=None, metavar="VOLNAME",
                     help="exact structural volume names (anchored, overrides --struct-pattern)")
@@ -238,6 +243,7 @@ def main() -> None:
             anode_pats=args.anode_pattern,
             opdet_pats=args.opdet_pattern,
             struct_pats=struct_pats,
+            cathode_pats=args.cathode_pattern,
             verbose=args.verbose,
         )
         entries += geo_entries

@@ -32,6 +32,7 @@ from .ir import IRCollection, VolumeEntry
 
 _ANODE_COL   = "royalblue"
 _OPDET_COL   = "darkorange"
+_CATHODE_COL = "teal"
 _RADIO_COL   = "crimson"
 _FACE_ALPHA  = 0.25
 _EDGE_ALPHA  = 0.6
@@ -249,6 +250,7 @@ def plot_ir(
 
     anodes  = filtered.by_kind("anode")
     opdets  = filtered.by_kind("opdet")
+    cathodes = filtered.by_kind("cathode")
     structs = filtered.by_kind("struct")
     radios  = filtered.by_kind("radio")
 
@@ -313,6 +315,7 @@ def plot_ir(
                 lbl = "_"
 
     _draw_boxes(anodes, _ANODE_COL, "Anodes",    zorder3d=3)
+    _draw_boxes(cathodes, _CATHODE_COL, "Cathodes", zorder3d=3)
     _draw_boxes(opdets, _OPDET_COL, "Opt. det.", zorder3d=4)
     if surfaces and radios:
         # one colour per selected surface (producer#index), or per producer
@@ -332,7 +335,7 @@ def plot_ir(
         _draw_boxes(radios, _RADIO_COL, "Radio vol.", zorder3d=2)
 
     # ---- axis limits (enclose every drawn volume) ----
-    lo, hi = _world_bounds(anodes + opdets + structs + radios)
+    lo, hi = _world_bounds(anodes + opdets + cathodes + structs + radios)
     if lo is not None:
         span = hi - lo
         ax3.set_xlim(lo[o3[0]], hi[o3[0]])
@@ -458,12 +461,12 @@ def main() -> None:
     # ---- volume selectors ----
     grp = ap.add_argument_group("volume selectors")
     grp.add_argument("--no-detector", action="store_true",
-                     help="exclude detector volumes (anode, opdet, struct)")
+                     help="exclude detector volumes (anode, opdet, cathode, struct)")
     grp.add_argument("--no-radio", action="store_true",
                      help="exclude radiological background volumes (radio)")
     grp.add_argument("--kind", nargs="+", default=None,
                      metavar="KIND",
-                     help="show only these kinds: anode opdet struct radio "
+                     help="show only these kinds: anode opdet cathode struct radio "
                           "(applied after --no-detector / --no-radio)")
     grp.add_argument("--name", nargs="+", default=None,
                      metavar="PATTERN",
@@ -473,6 +476,8 @@ def main() -> None:
                      help="regex filter on anode volume names")
     grp.add_argument("--opdet", nargs="+", default=None, metavar="PATTERN",
                      help="regex filter on opdet volume names")
+    grp.add_argument("--cathode", nargs="+", default=None, metavar="PATTERN",
+                     help="regex filter on cathode volume names")
     grp.add_argument("--struct", nargs="+", default=None, metavar="PATTERN",
                      help="regex filter on struct volume names")
     grp.add_argument("--radio", nargs="+", default=None, metavar="PATTERN",
@@ -497,7 +502,7 @@ def main() -> None:
     print(f"[info] loaded {len(ir.volumes)} volumes from {ir_path.name}", file=sys.stderr)
 
     # build effective kinds list from coarse + fine selectors
-    _DET_KINDS   = {"anode", "opdet", "struct"}
+    _DET_KINDS   = {"anode", "opdet", "cathode", "struct"}
     _RADIO_KINDS = {"radio"}
     active: set[str] = _DET_KINDS | _RADIO_KINDS
     if args.no_detector:
@@ -510,7 +515,7 @@ def main() -> None:
         unknown   = requested - (_DET_KINDS | _RADIO_KINDS)
         if unknown:
             print(f"[warn] unknown kind(s): {', '.join(sorted(unknown))}; "
-                  f"valid kinds are: anode opdet struct radio", file=sys.stderr)
+                  f"valid kinds are: anode opdet cathode struct radio", file=sys.stderr)
         active &= requested
     kinds = sorted(active) if active != (_DET_KINDS | _RADIO_KINDS) else None
 
@@ -522,7 +527,8 @@ def main() -> None:
 
     kind_patterns: dict[str, list[str]] = {}
     for kind, flag in (("anode", args.anode), ("opdet", args.opdet),
-                       ("struct", args.struct), ("radio", args.radio)):
+                       ("cathode", args.cathode), ("struct", args.struct),
+                       ("radio", args.radio)):
         if flag:
             kind_patterns[kind] = flag
 
