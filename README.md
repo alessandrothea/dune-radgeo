@@ -73,6 +73,16 @@ margin), so use the selectors to zoom in.  The 2D views are drawn to scale
 by default and share the same axis ranges; `--no-proportional` stretches each one to fill its panel,
 which helps when the detector is much longer along one axis than another.
 
+`--orientation` sets which axis points up.  Each panel keeps its role; only
+the axes change:
+
+| Panel        | `hd` (default)        | `vd` (drift vertical) |
+|--------------|-----------------------|-----------------------|
+| top-left     | 3D, y up              | 3D, x up              |
+| top-right    | Z–Y  beam face        | Z–X  beam face        |
+| bottom-left  | Z–X  top view         | Z–Y  top view         |
+| bottom-right | X–Y  side view        | Y–X  side view        |
+
 ### 3. Interactive notebook
 
 ```bash
@@ -132,6 +142,9 @@ bki-plot <ir.json> [--out <file.pdf>]
   --title TEXT        plot title
   --[no-]proportional 2D views to scale (default) or stretched to fill
                       their panels
+  --orientation O     hd: drift axis x horizontal, y vertical (default)
+                      vd: x vertical in every view
+                      auto: vd for VD IRs, hd otherwise
 
 volume selectors (applied in order):
   --no-detector       exclude anode / opdet / struct volumes
@@ -203,6 +216,10 @@ bki-plot radio.json --no-radio --title "FD2 VD geometry" --view 30 -45 -o geomet
 
 # anodes and active volume only
 bki-plot radio.json --kind anode struct --struct '^volTPCActive$' -o tpc.pdf
+
+# Vertical Drift: drift axis x drawn vertically ("auto" picks it for VD IRs)
+bki-plot radio.json --orientation vd -o radio_vd.pdf
+bki-plot radio.json --orientation auto
 
 # 2D views stretched to fill their panels instead of drawn to scale
 bki-plot radio.json --no-proportional -o radio_stretched.pdf
@@ -312,7 +329,8 @@ the form `PRODUCER_RE#SEL`:
 | `rot`  | 3×3 world-frame rotation matrix |
 | `meta` | kind-specific metadata (nuclide, BqPercc, surface, …) |
 
-Axis convention: **x** = drift, **y** = vertical, **z** = beam.
+Axis convention: **x** = drift, **z** = beam; **y** is vertical in HD and
+horizontal in VD (where the drift, x, is vertical).
 
 ---
 
@@ -336,6 +354,7 @@ fig.show()
 # static matplotlib PDF (same layout as bki-plot)
 plot_ir(ir, "detector.pdf")
 plot_ir(ir, "detector_stretched.pdf", proportional=False)
+plot_ir(ir, "detector_vd.pdf", orientation="vd")   # drift axis x vertical
 
 # plot with selectors
 plot_ir(ir, "radio_only.pdf", kinds=["radio"],

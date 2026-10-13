@@ -2,10 +2,11 @@
 bki-plot  —  render a JSON IR as a matplotlib PDF
 
 Produces the same 3D + 3×2D layout as the original plot_gdml_detectors.py:
-  top-left   3D ortho view (proportional axes)
-  top-right  Z–Y  beam face
-  bot-left   Z–X  top view
-  bot-right  X–Y  side view
+                 --orientation hd (default)   --orientation vd (x vertical)
+  top-left       3D ortho view                3D ortho view
+  top-right      Z–Y  beam face               Z–X  beam face
+  bot-left       Z–X  top view                Z–Y  top view
+  bot-right      X–Y  side view               Y–X  side view
 
 Usage:
   bki-plot detector.json --out detector.pdf
@@ -50,6 +51,26 @@ _SURFACE_PALETTE = ("tab:red", "tab:blue", "tab:green", "tab:purple",
                     "tab:brown", "tab:pink", "tab:olive", "tab:cyan",
                     "tab:orange", "tab:gray")
 _MAX_SURFACE_GROUPS = 20
+
+# Axis layouts, keyed by orientation.  World axes: 0 = x (drift),
+# 1 = y, 2 = z (beam).  "order3d" maps world axes onto the 3D plot's
+# (X, Y, Z=up) axes; "views" lists the (horizontal, vertical, title) world
+# axes of the top-right, bottom-left and bottom-right 2D panels.
+#   hd: drift horizontal, y vertical.
+#   vd: drift vertical (x up); each panel keeps its role, with x and y
+#       swapped.  The 3D Y axis (world y) is inverted to stay right-handed.
+_LAYOUTS: dict[str, dict] = {
+    "hd": dict(order3d=(2, 0, 1), flip3d_y=False,
+               labels=("x (drift)", "y (vert)", "z (beam)"),
+               views=((2, 1, "Z–Y  (beam face)"),
+                      (2, 0, "Z–X  (top view)"),
+                      (0, 1, "X–Y  (side view)"))),
+    "vd": dict(order3d=(2, 1, 0), flip3d_y=True,
+               labels=("x (drift, vert)", "y", "z (beam)"),
+               views=((2, 0, "Z–X  (beam face)"),
+                      (2, 1, "Z–Y  (top view)"),
+                      (1, 0, "Y–X  (side view)"))),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -171,6 +192,7 @@ def plot_ir(
     kind_patterns: dict[str, list[str]] | None = None,
     surfaces: list[str] | None = None,
     proportional: bool = True,
+    orientation: str = "hd",
 ) -> None:
     """
     Render an IRCollection to a PDF/PNG file.
@@ -196,10 +218,24 @@ def plot_ir(
     proportional : bool, optional
         Draw the 2D views to scale (1 cm == 1 cm on both axes; default).
         When False each 2D panel is stretched to fill its grid cell.
+    orientation : {"hd", "vd", "auto"}, optional
+        ``"hd"`` (default) draws the drift axis x horizontally with y
+        vertical; ``"vd"`` draws x vertically, in every 2D view that
+        contains it and in the 3D view.  ``"auto"`` picks ``"vd"`` when
+        ``ir.detector == "vd"``, else ``"hd"``.
 
-    Axes convention: x = drift, y = vertical, z = beam.
-    The 3D axes are re-ordered as (z, x, y) to match the original script.
+    Axes convention: x = drift, y = vertical (HD) / horizontal (VD),
+    z = beam.  In HD mode the 3D axes are re-ordered as (z, x, y) to match
+    the original script; in VD mode as (z, y, x).
     """
+    if orientation == "auto":
+        orientation = "vd" if ir.detector == "vd" else "hd"
+    if orientation not in _LAYOUTS:
+        raise ValueError(f"unknown orientation '{orientation}' "
+                         f"(expected one of: hd, vd, auto)")
+    layout = _LAYOUTS[orientation]
+    o3     = layout["order3d"]
+
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -220,10 +256,10 @@ def plot_ir(
     if title:
         fig.suptitle(title, fontsize=11, fontweight="bold")
 
-    ax3   = fig.add_subplot(2, 2, 1, projection="3d")
-    ax_zy = fig.add_subplot(2, 2, 2)
-    ax_zx = fig.add_subplot(2, 2, 3)
-    ax_xy = fig.add_subplot(2, 2, 4)
+    ax3 = fig.add_subplot(2, 2, 1, projection="3d")
+    # (axes, horizontal world axis, vertical world axis, title) per 2D panel
+    views2d = [(fig.add_subplot(2, 2, k), ah, av, ttl)
+               for k, (ah, av, ttl) in zip((2, 3, 4), layout["views"])]
 
     # ---- structural volumes (batched per name) ----
     s_face_groups: dict[str, list]       = defaultdict(list)
@@ -233,10 +269,10 @@ def plot_ir(
         corners = box_corners_world(v.pos, v.ext, v.rot)
         for fi in BOX_FACES:
             s_face_groups[v.name].append(
-                [[corners[j][2], corners[j][0], corners[j][1]] for j in fi])
+                [[corners[j][o3[0]], corners[j][o3[1]], corners[j][o3[2]]] for j in fi])
         if v.name not in s_poly_groups:
-            s_poly_groups[v.name] = {ax_zy: [], ax_zx: [], ax_xy: []}
-        for ax2d, ah, av in ((ax_zy, 2, 1), (ax_zx, 2, 0), (ax_xy, 0, 1)):
+            s_poly_groups[v.name] = {ax2d: [] for ax2d, *_ in views2d}
+        for ax2d, ah, av, _ in views2d:
             s_poly_groups[v.name][ax2d].append(project_polygon(corners, ah, av))
 
     for vname, faces in s_face_groups.items():
@@ -261,14 +297,14 @@ def plot_ir(
             corners   = box_corners_world(v.pos, v.ext, v.rot)
             lbl       = (f"{label_pfx} ({len(vols)})" if show_count else label_pfx) \
                         if i == 0 else "_"
-            faces_3d  = [[[corners[j][2], corners[j][0], corners[j][1]]
+            faces_3d  = [[[corners[j][o3[0]], corners[j][o3[1]], corners[j][o3[2]]]
                            for j in fi] for fi in BOX_FACES]
             ax3.add_collection3d(Poly3DCollection(
                 faces_3d, alpha=_FACE_ALPHA,
                 facecolor=col, edgecolor=col, linewidth=0.4))
             if i == 0:
                 ax3.plot([], [], [], color=col, label=lbl, linewidth=3)
-            for ax2d, ah, av in ((ax_zy, 2, 1), (ax_zx, 2, 0), (ax_xy, 0, 1)):
+            for ax2d, ah, av, _ in views2d:
                 poly2d = project_polygon(corners, ah, av)
                 ax2d.add_patch(MplPolygon(poly2d, closed=True,
                                           facecolor=col, edgecolor=col,
@@ -299,12 +335,18 @@ def plot_ir(
     lo, hi = _world_bounds(anodes + opdets + structs + radios)
     if lo is not None:
         span = hi - lo
-        ax3.set_xlim(lo[2], hi[2])
-        ax3.set_ylim(lo[0], hi[0])
-        ax3.set_zlim(lo[1], hi[1])
-        ax3.set_box_aspect((span[2], span[0], span[1]))
+        ax3.set_xlim(lo[o3[0]], hi[o3[0]])
+        if layout["flip3d_y"]:
+            ax3.set_ylim(hi[o3[1]], lo[o3[1]])
+        else:
+            ax3.set_ylim(lo[o3[1]], hi[o3[1]])
+        ax3.set_zlim(lo[o3[2]], hi[o3[2]])
+        ax3.set_box_aspect((span[o3[0]], span[o3[1]], span[o3[2]]))
 
-    ax3.set_xlabel("z [cm]"); ax3.set_ylabel("x [cm]"); ax3.set_zlabel("y [cm]")
+    names = "xyz"
+    ax3.set_xlabel(f"{names[o3[0]]} [cm]")
+    ax3.set_ylabel(f"{names[o3[1]]} [cm]")
+    ax3.set_zlabel(f"{names[o3[2]]} [cm]")
     ax3.view_init(elev=view[0], azim=view[1])
     ax3.set_proj_type("ortho")
     ax3.set_title("3D (ortho, proportional)")
@@ -313,12 +355,11 @@ def plot_ir(
     # All 2D views share the same world bounding box, so matching axes line
     # up across panels; when proportional they are also drawn to scale
     # (1 cm == 1 cm on both axes), otherwise they fill their grid cell.
-    for ax2d, ah, av, xl, yl, ttl in (
-        (ax_zy, 2, 1, "z (beam) [cm]",  "y (vert) [cm]",  "Z–Y  (beam face)"),
-        (ax_zx, 2, 0, "z (beam) [cm]",  "x (drift) [cm]", "Z–X  (top view)"),
-        (ax_xy, 0, 1, "x (drift) [cm]", "y (vert) [cm]",  "X–Y  (side view)"),
-    ):
-        ax2d.set_xlabel(xl); ax2d.set_ylabel(yl); ax2d.set_title(ttl)
+    labels = layout["labels"]
+    for ax2d, ah, av, ttl in views2d:
+        ax2d.set_xlabel(f"{labels[ah]} [cm]")
+        ax2d.set_ylabel(f"{labels[av]} [cm]")
+        ax2d.set_title(ttl)
         if lo is not None:
             ax2d.set_xlim(lo[ah], hi[ah])
             ax2d.set_ylim(lo[av], hi[av])
@@ -410,6 +451,10 @@ def main() -> None:
                     help="draw the 2D views to scale (1 cm == 1 cm on both "
                          "axes); --no-proportional stretches each view to "
                          "fill its panel (default: proportional)")
+    ap.add_argument("--orientation", choices=("hd", "vd", "auto"), default="hd",
+                    help="hd: drift axis x horizontal, y vertical; vd: x "
+                         "vertical in every view; auto: vd for VD IRs, hd "
+                         "otherwise (default: hd)")
     # ---- volume selectors ----
     grp = ap.add_argument_group("volume selectors")
     grp.add_argument("--no-detector", action="store_true",
@@ -499,7 +544,8 @@ def main() -> None:
     plot_ir(ir, out_path, title=title, view=tuple(args.view),
             kinds=kinds, name_patterns=args.name,
             kind_patterns=kind_patterns or None,
-            surfaces=args.surface, proportional=args.proportional)
+            surfaces=args.surface, proportional=args.proportional,
+            orientation=args.orientation)
 
 
 if __name__ == "__main__":
