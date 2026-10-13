@@ -33,6 +33,7 @@ from .ir import IRCollection, VolumeEntry
 _ANODE_COL   = "royalblue"
 _OPDET_COL   = "darkorange"
 _CATHODE_COL = "teal"
+_FSHAPER_COL = "slategray"
 _RADIO_COL   = "crimson"
 _FACE_ALPHA  = 0.25
 _EDGE_ALPHA  = 0.6
@@ -174,9 +175,18 @@ def _world_bounds(vols: list[VolumeEntry], pad_frac: float = 0.03) -> tuple:
 
 
 def _surface_tag(v: VolumeEntry) -> str:
-    """'producer#idx' for radio entries, plain name otherwise."""
+    """'producer#idx' for radio entries, 'volume#copy' for parts of
+    multi-part solids, plain name otherwise."""
     idx = v.meta.get("index")
-    return f"{v.name}#{idx}" if v.kind == "radio" and idx is not None else v.name
+    if v.kind == "radio" and idx is not None:
+        return f"{v.name}#{idx}"
+    copy = v.meta.get("copy")
+    return f"{v.name}#{copy}" if copy is not None else v.name
+
+
+def _n_placements(vols: list[VolumeEntry]) -> int:
+    """Placements in `vols`, counting the parts of a multi-part solid once."""
+    return len({(v.kind, v.name, v.meta.get("copy", id(v))) for v in vols})
 
 
 # ---------------------------------------------------------------------------
@@ -237,7 +247,11 @@ def plot_ir(
     layout = _LAYOUTS[orientation]
     o3     = layout["order3d"]
 
-    import matplotlib
+    try:
+        import matplotlib
+    except ImportError as exc:
+        raise ImportError("plotting needs matplotlib: "
+                          "pip install 'duneradgeo[plot]'") from exc
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.patches import Polygon as MplPolygon
@@ -251,6 +265,7 @@ def plot_ir(
     anodes  = filtered.by_kind("anode")
     opdets  = filtered.by_kind("opdet")
     cathodes = filtered.by_kind("cathode")
+    fshapers = filtered.by_kind("fieldshaper")
     structs = filtered.by_kind("struct")
     radios  = filtered.by_kind("radio")
 
@@ -316,6 +331,10 @@ def plot_ir(
 
     _draw_boxes(anodes, _ANODE_COL, "Anodes",    zorder3d=3)
     _draw_boxes(cathodes, _CATHODE_COL, "Cathodes", zorder3d=3)
+    # one ring = several boxes: count placements, not boxes
+    _draw_boxes(fshapers, _FSHAPER_COL,
+                f"Field shapers ({_n_placements(fshapers)})", zorder3d=2,
+                show_count=False)
     _draw_boxes(opdets, _OPDET_COL, "Opt. det.", zorder3d=4)
     if surfaces and radios:
         # one colour per selected surface (producer#index), or per producer
@@ -335,7 +354,7 @@ def plot_ir(
         _draw_boxes(radios, _RADIO_COL, "Radio vol.", zorder3d=2)
 
     # ---- axis limits (enclose every drawn volume) ----
-    lo, hi = _world_bounds(anodes + opdets + cathodes + structs + radios)
+    lo, hi = _world_bounds(anodes + opdets + cathodes + fshapers + structs + radios)
     if lo is not None:
         span = hi - lo
         ax3.set_xlim(lo[o3[0]], hi[o3[0]])
@@ -385,17 +404,18 @@ def plot_ir(
 def _print_list(volumes: list) -> None:
     """Compact summary: kinds → unique names → placement count."""
     from collections import Counter
-    counts      = Counter(v.kind for v in volumes)
     names_by_kind: dict[str, list[str]] = {}
     for v in volumes:
         names_by_kind.setdefault(v.kind, [])
         if v.name not in names_by_kind[v.kind]:
             names_by_kind[v.kind].append(v.name)
     for kind in sorted(names_by_kind):
-        print(f"{kind}  ({counts[kind]} placements)")
+        kvols = [v for v in volumes if v.kind == kind]
+        print(f"{kind}  ({_n_placements(kvols)} placements)")
         for name in names_by_kind[kind]:
-            vs = [v for v in volumes if v.kind == kind and v.name == name]
-            print(f"  {name}  ({len(vs)})")
+            vs = [v for v in kvols if v.name == name]
+            n  = _n_placements(vs)
+            print(f"  {name}  ({n}" + (f", {len(vs)} boxes)" if len(vs) != n else ")"))
             if kind == "radio":
                 # one line per generation surface, for use with --surface
                 for v in vs:
@@ -410,16 +430,16 @@ def _print_list_detail(volumes: list) -> None:
     """One line per placement: kind, name, and world-frame x/y/z ranges."""
     from ._draw import box_corners_world
     # header
-    print(f"{'#':>5}  {'kind':<8}  {'name':<44}  {'surface':<22}"
+    print(f"{'#':>5}  {'kind':<11}  {'name':<44}  {'surface':<22}"
           f"  {'x_min':>10}  {'x_max':>10}"
           f"  {'y_min':>10}  {'y_max':>10}"
           f"  {'z_min':>10}  {'z_max':>10}  cm")
-    print("-" * 154)
+    print("-" * 157)
     for idx, v in enumerate(volumes):
         corners = box_corners_world(v.pos, v.ext, v.rot)
         lo, hi  = corners.min(axis=0), corners.max(axis=0)
-        print(f"{idx:5d}  {v.kind:<8}  {_surface_tag(v):<44}"
-              f"  {v.meta.get('surface', ''):<22}"
+        print(f"{idx:5d}  {v.kind:<11}  {_surface_tag(v):<44}"
+              f"  {v.meta.get('surface', v.meta.get('part', '')):<22}"
               f"  {lo[0]:10.3f}  {hi[0]:10.3f}"
               f"  {lo[1]:10.3f}  {hi[1]:10.3f}"
               f"  {lo[2]:10.3f}  {hi[2]:10.3f}")
@@ -461,12 +481,14 @@ def main() -> None:
     # ---- volume selectors ----
     grp = ap.add_argument_group("volume selectors")
     grp.add_argument("--no-detector", action="store_true",
-                     help="exclude detector volumes (anode, opdet, cathode, struct)")
+                     help="exclude detector volumes (anode, opdet, cathode, "
+                          "fieldshaper, struct)")
     grp.add_argument("--no-radio", action="store_true",
                      help="exclude radiological background volumes (radio)")
     grp.add_argument("--kind", nargs="+", default=None,
                      metavar="KIND",
-                     help="show only these kinds: anode opdet cathode struct radio "
+                     help="show only these kinds: anode opdet cathode fieldshaper "
+                          "struct radio "
                           "(applied after --no-detector / --no-radio)")
     grp.add_argument("--name", nargs="+", default=None,
                      metavar="PATTERN",
@@ -478,6 +500,8 @@ def main() -> None:
                      help="regex filter on opdet volume names")
     grp.add_argument("--cathode", nargs="+", default=None, metavar="PATTERN",
                      help="regex filter on cathode volume names")
+    grp.add_argument("--fieldshaper", nargs="+", default=None, metavar="PATTERN",
+                     help="regex filter on field-shaper volume names")
     grp.add_argument("--struct", nargs="+", default=None, metavar="PATTERN",
                      help="regex filter on struct volume names")
     grp.add_argument("--radio", nargs="+", default=None, metavar="PATTERN",
@@ -502,7 +526,7 @@ def main() -> None:
     print(f"[info] loaded {len(ir.volumes)} volumes from {ir_path.name}", file=sys.stderr)
 
     # build effective kinds list from coarse + fine selectors
-    _DET_KINDS   = {"anode", "opdet", "cathode", "struct"}
+    _DET_KINDS   = {"anode", "opdet", "cathode", "fieldshaper", "struct"}
     _RADIO_KINDS = {"radio"}
     active: set[str] = _DET_KINDS | _RADIO_KINDS
     if args.no_detector:
@@ -515,7 +539,7 @@ def main() -> None:
         unknown   = requested - (_DET_KINDS | _RADIO_KINDS)
         if unknown:
             print(f"[warn] unknown kind(s): {', '.join(sorted(unknown))}; "
-                  f"valid kinds are: anode opdet cathode struct radio", file=sys.stderr)
+                  f"valid kinds are: anode opdet cathode fieldshaper struct radio", file=sys.stderr)
         active &= requested
     kinds = sorted(active) if active != (_DET_KINDS | _RADIO_KINDS) else None
 
@@ -527,7 +551,8 @@ def main() -> None:
 
     kind_patterns: dict[str, list[str]] = {}
     for kind, flag in (("anode", args.anode), ("opdet", args.opdet),
-                       ("cathode", args.cathode), ("struct", args.struct),
+                       ("cathode", args.cathode),
+                       ("fieldshaper", args.fieldshaper), ("struct", args.struct),
                        ("radio", args.radio)):
         if flag:
             kind_patterns[kind] = flag

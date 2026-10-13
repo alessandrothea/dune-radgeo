@@ -23,6 +23,7 @@ _KIND_COLOUR: dict[str, str] = {
     "anode":  "royalblue",
     "opdet":  "darkorange",
     "cathode": "teal",
+    "fieldshaper": "slategray",
     "struct": "mediumseagreen",
     "radio":  "crimson",
 }
@@ -30,6 +31,7 @@ _KIND_OPACITY: dict[str, float] = {
     "anode":  0.25,
     "opdet":  0.20,
     "cathode": 0.25,
+    "fieldshaper": 0.30,
     "struct": 0.10,
     "radio":  0.20,
 }

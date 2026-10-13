@@ -10,8 +10,10 @@ import numpy as np
 
 
 def _rot_matrix_rad(rx: float, ry: float, rz: float) -> np.ndarray:
-    """3×3 rotation matrix from GDML Euler angles [rad].
-    Convention: intrinsic ZYX = extrinsic XYZ → R = Rz @ Ry @ Rx."""
+    """3×3 rotation matrix from GDML Euler angles [rad]: R = Rz @ Ry @ Rx.
+
+    R maps a boolean operand's frame into the boolean solid's frame.  A
+    physvol is placed with the inverse, R.T (see :meth:`_parse_physvol`)."""
     cx, sx = np.cos(rx), np.sin(rx)
     cy, sy = np.cos(ry), np.sin(ry)
     cz, sz = np.cos(rz), np.sin(rz)
@@ -20,6 +22,16 @@ def _rot_matrix_rad(rx: float, ry: float, rz: float) -> np.ndarray:
     Rz = np.array([[cz, -sz, 0], [sz, cz,  0], [0,   0,  1]])
     return Rz @ Ry @ Rx
 
+
+def _arc_points(r: float, phi0: float, dphi: float) -> np.ndarray:
+    """(N, 2) points on a circle arc of radius r that include its x/y extremes."""
+    if dphi >= 2 * np.pi - 1e-9:
+        phis = np.arange(4) * np.pi / 2
+    else:
+        quads = np.arange(np.ceil(phi0 / (np.pi / 2)),
+                          np.floor((phi0 + dphi) / (np.pi / 2)) + 1) * np.pi / 2
+        phis = np.concatenate([[phi0, phi0 + dphi], quads])
+    return r * np.column_stack([np.cos(phis), np.sin(phis)])
 
 class GDMLGeometry:
     """
@@ -43,6 +55,8 @@ class GDMLGeometry:
         self._defs:  dict[str, np.ndarray] = {}   # named positions [cm]
         self._rots:  dict[str, np.ndarray] = {}   # named rotations (3×3)
         self._boxes: dict[str, np.ndarray] = {}   # solid → (dx,dy,dz) [cm]
+        self._prims: dict[str, tuple]      = {}   # box/tube/torus → local AABB (centre, ext)
+        self._bools: dict[str, tuple]      = {}   # boolean → (op, first, second, pos, rot)
         self._vols:  dict[str, dict]       = {}   # vol → {solid, daughters}
         self._world: str | None            = None
         self._solid_first: dict[str, str]  = {}   # boolean-solid → outer ref
@@ -102,29 +116,56 @@ class GDMLGeometry:
         if solids is None:
             return
         for child in solids:
+            name = child.get("name", "")
+            u    = self._ufact(child.get("lunit", "mm"))
+            au   = 1.0 if child.get("aunit", "rad") == "rad" else np.pi / 180.0
             if child.tag == "box":
-                name = child.get("name", "")
-                u = self._ufact(child.get("lunit", "mm"))
                 self._boxes[name] = np.array([
                     self._fval(child.get("x", "0")) * u,
                     self._fval(child.get("y", "0")) * u,
                     self._fval(child.get("z", "0")) * u,
                 ])
+                self._prims[name] = (np.zeros(3), self._boxes[name])
+            elif child.tag == "tube":
+                phi0 = self._fval(child.get("startphi", "0")) * au
+                dphi = self._fval(child.get("deltaphi", str(2 * np.pi / au))) * au
+                pts  = np.vstack([
+                    _arc_points(self._fval(child.get(k, "0")) * u, phi0, dphi)
+                    for k in ("rmin", "rmax")])
+                hz   = self._fval(child.get("z", "0")) * u / 2
+                self._prims[name] = self._aabb(pts, -hz, hz)
+            elif child.tag == "torus":
+                phi0 = self._fval(child.get("startphi", "0")) * au
+                dphi = self._fval(child.get("deltaphi", str(2 * np.pi / au))) * au
+                rmax = self._fval(child.get("rmax", "0")) * u
+                arc  = _arc_points(self._fval(child.get("rtor", "0")) * u, phi0, dphi)
+                # swept disk of radius rmax around the arc
+                pts  = np.vstack([arc - rmax, arc + rmax])
+                self._prims[name] = self._aabb(pts, -rmax, rmax)
         for child in solids:
             if child.tag in ("subtraction", "union", "intersection"):
-                first = child.find("first")
+                first  = child.find("first")
+                second = child.find("second")
                 if first is not None:
                     self._solid_first[child.get("name", "")] = first.get("ref", "")
+                if first is not None and second is not None:
+                    pos, rot = self._parse_transform(child)
+                    self._bools[child.get("name", "")] = (
+                        child.tag, first.get("ref", ""), second.get("ref", ""), pos, rot)
 
-    def _parse_physvol(self, pv) -> tuple:
-        volref = None
-        pos    = np.zeros(3)
-        rot    = np.eye(3)
-        for child in pv:
+    @staticmethod
+    def _aabb(xy: np.ndarray, z0: float, z1: float) -> tuple:
+        lo = np.array([xy[:, 0].min(), xy[:, 1].min(), z0])
+        hi = np.array([xy[:, 0].max(), xy[:, 1].max(), z1])
+        return (lo + hi) / 2, hi - lo
+
+    def _parse_transform(self, elem) -> tuple:
+        """(pos, rot) from the position/rotation children of a physvol or boolean."""
+        pos = np.zeros(3)
+        rot = np.eye(3)
+        for child in elem:
             tag = child.tag
-            if tag == "volumeref":
-                volref = child.get("ref")
-            elif tag == "position":
+            if tag == "position":
                 u = self._ufact(child.get("unit", "mm"))
                 pos = np.array([
                     self._fval(child.get("x", "0")) * u,
@@ -143,7 +184,20 @@ class GDMLGeometry:
                 )
             elif tag == "rotationref":
                 rot = self._rots.get(child.get("ref", ""), np.eye(3))
-        return volref, pos, rot
+        return pos, rot
+
+    def _parse_physvol(self, pv) -> tuple:
+        volref = None
+        for child in pv:
+            if child.tag == "volumeref":
+                volref = child.get("ref")
+        pos, rot = self._parse_transform(pv)
+        # Geant4 places daughters with the inverse of the GDML rotation (and
+        # boolean operands without it).  Checked on the VD geometries: only
+        # this combination centres the field-shaper rings on the TPC, joins
+        # their corner tori to the tube ends and lays the cathode X-ARAPUCAs
+        # flat in the cathode plane.
+        return volref, pos, rot.T
 
     def _parse_structure(self, root):
         structure = root.find("structure")
@@ -242,6 +296,35 @@ class GDMLGeometry:
     @property
     def volume_names(self) -> set[str]:
         return set(self._vols.keys())
+
+    def solid_parts(self, solid: str, _seen: frozenset = frozenset()) -> list[tuple]:
+        """
+        Primitive pieces of `solid` as (name, centre, rot, ext) in the solid's
+        own frame, each piece being the local bounding box of a box, tube or
+        torus.  Both operands of a union are kept; subtractions and
+        intersections keep only their first operand (the outer envelope).
+        Unsupported primitives yield no pieces.
+        """
+        if solid in self._prims:
+            centre, ext = self._prims[solid]
+            return [(solid, centre, np.eye(3), ext)]
+        node = self._bools.get(solid)
+        if node is None or solid in _seen:
+            return []
+        op, first, second, pos, rot = node
+        seen  = _seen | {solid}
+        parts = self.solid_parts(first, seen)
+        if op == "union":
+            parts += [(n, pos + rot @ c, rot @ r, e)
+                      for n, c, r, e in self.solid_parts(second, seen)]
+        return parts
+
+    def volume_parts(self, vol_name: str) -> list[tuple]:
+        """:meth:`solid_parts` of the solid of logical volume `vol_name`."""
+        vol = self._vols.get(vol_name)
+        if vol is None or not vol.get("solid"):
+            return []
+        return self.solid_parts(vol["solid"])
 
     def box_extents(self, vol_name: str) -> np.ndarray | None:
         """Full (dx,dy,dz) extents [cm] for vol_name; None if not a box.

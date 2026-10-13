@@ -2,8 +2,8 @@
 
 Inspect DUNE background sources without a LArSoft environment:
 
-- **detector geometry** — anode (CRP/APA), optical detector, cathode, and
-  structural volume positions from GDML files
+- **detector geometry** — anode (CRP/APA), optical detector, cathode,
+  field-shaper, and structural volume positions from GDML files
 - **radiological volumes** — emission boxes from RadioGen / Decay0Gen FHiCL
   configurations
 
@@ -14,12 +14,27 @@ Pure Python (NumPy + Matplotlib + Plotly), no PyROOT or LArSoft required.
 ## Installation
 
 ```bash
-cd duneradgeo
-uv sync          # or: pip install -e .
+cd dune-radgeo
+uv sync                  # or: pip install .   — everything
 ```
 
-Core dependencies: `numpy`, `matplotlib`, `plotly`.
-Notebook execution also requires `jupyter` and `nbconvert` (included by default).
+`bki-extract` itself needs only NumPy.  For an extraction-only install,
+e.g. on top of a LArSoft Python that already provides NumPy, skip the
+dependencies:
+
+```bash
+pip install --no-deps .          # add numpy if the environment lacks it
+```
+
+| Package | Used by |
+|---------|---------|
+| `numpy` | everything (`bki-extract`, `bki-plot --list` / `-L` need nothing else) |
+| `matplotlib` | `bki-plot` PDF/PNG output, `plot_ir` |
+| `plotly` | `make_figure` |
+| `jupyter`, `nbconvert` | `nb_B.ipynb`, `scripts/run_notebook.py` |
+
+In a `--no-deps` install, rendering a plot without matplotlib stops with an
+`ImportError` that says what to install.
 
 ---
 
@@ -113,6 +128,8 @@ bki-extract <input> --out <ir.json>
   --anode-pattern P   regex(es) for anode volume names   (auto-detected)
   --opdet-pattern P   regex(es) for opdet volume names   (auto-detected)
   --cathode-pattern P regex(es) for cathode volume names (auto-detected, VD only)
+  --fieldshaper-pattern P
+                      regex(es) for field-shaper volume names (auto-detected, VD only)
   --struct-pattern P  regex(es) for structural volumes   (auto-detected)
   --struct VOLNAME    exact structural volume names (anchored, overrides --struct-pattern)
 
@@ -148,12 +165,15 @@ bki-plot <ir.json> [--out <file.pdf>]
                       auto: vd for VD IRs, hd otherwise
 
 volume selectors (applied in order):
-  --no-detector       exclude anode / opdet / cathode / struct volumes
+  --no-detector       exclude anode / opdet / cathode / fieldshaper / struct volumes
   --no-radio          exclude radio volumes
-  --kind K [K …]      keep only these kinds: anode opdet cathode struct radio
+  --kind K [K …]      keep only these kinds: anode opdet cathode fieldshaper
+                      struct radio
   --anode P [P …]     regex filter on anode volume names
   --opdet P [P …]     regex filter on opdet volume names
   --cathode P [P …]   regex filter on cathode volume names
+  --fieldshaper P [P …]
+                      regex filter on field-shaper volume names
   --struct P [P …]    regex filter on struct volume names
   --radio P [P …]     regex filter on radio producer names
   --name P [P …]      cross-kind name regex
@@ -221,6 +241,9 @@ bki-plot radio.json --kind anode struct --struct '^volTPCActive$' -o tpc.pdf
 
 # drift geometry: anode and cathode planes
 bki-plot geo.json --kind anode cathode --orientation auto -o drift.pdf
+
+# field cage only, slim rings (photon-detector window) only
+bki-plot geo.json --kind fieldshaper --fieldshaper 'Slim$' -o fc_slim.pdf
 
 # Vertical Drift: drift axis x drawn vertically ("auto" picks it for VD IRs)
 bki-plot radio.json --orientation vd -o radio_vd.pdf
@@ -328,11 +351,20 @@ the form `PRODUCER_RE#SEL`:
 
 | Field  | Description |
 |--------|-------------|
-| `kind` | `anode`, `opdet`, `cathode`, `struct`, or `radio` |
+| `kind` | `anode`, `opdet`, `cathode`, `fieldshaper`, `struct`, or `radio` |
 | `pos`  | world-frame centre `[x, y, z]` in cm |
 | `ext`  | full extents `[dx, dy, dz]` in cm |
 | `rot`  | 3×3 world-frame rotation matrix |
 | `meta` | kind-specific metadata (nuclide, BqPercc, surface, …) |
+
+Every entry is a box.  Non-box solids are approximated: a tube or torus by
+its bounding box, a union by one box per operand, a subtraction or
+intersection by its first (outer) operand.  A volume that splits into several
+boxes gives one entry per box, all with the same `name`, plus
+`meta.copy` (placement index) and `meta.part` (the primitive solid).  For
+example, each VD field-shaper ring becomes 8 (or 12, for the slim rings)
+tube and corner boxes.  `--list` counts placements and shows the box count
+separately; `-L` prints `name#copy` and the part.
 
 Axis convention: **x** = drift, **z** = beam; **y** is vertical in HD and
 horizontal in VD (where the drift, x, is vertical).
@@ -389,13 +421,13 @@ from duneradgeo._fcl import expand_fcl
 
 Auto-detected from logical volume names:
 
-| Key  | Geometry | Anode | Opdet | Cathode | Default struct |
-|------|----------|-------|-------|---------|----------------|
-| `vd` | Vertical Drift (FD2) | `volAnodePlate`, `volAnodePlateBottom` | `volArapuca*` | `volCathodeGrid` (`volGroundGrid` in v4) | `volTPCActive`, `volGaseousArgon`, `volTPC`, `volCryostat` |
-| `hd` | Horizontal Drift / ProtoDUNE-HD | `volAPAFrameYSide` | `volArapuca_N` | — | `volTPCActiveInner`, `volGaseousArgon`, `volTPC`, `volCryostat` |
+| Key  | Geometry | Anode | Opdet | Cathode | Field shaper | Default struct |
+|------|----------|-------|-------|---------|--------------|----------------|
+| `vd` | Vertical Drift (FD2) | `volAnodePlate`, `volAnodePlateBottom` | `volArapuca*` | `volCathodeGrid` (`volGroundGrid` in v4) | `volFieldShaper`, `volFieldShaperSlim` | `volTPCActive`, `volGaseousArgon`, `volTPC`, `volCryostat` |
+| `hd` | Horizontal Drift / ProtoDUNE-HD | `volAPAFrameYSide` | `volArapuca_N` | — | — | `volTPCActiveInner`, `volGaseousArgon`, `volTPC`, `volCryostat` |
 
 Override with `--anode-pattern` / `--opdet-pattern` / `--cathode-pattern` /
-`--struct-pattern`.
+`--fieldshaper-pattern` / `--struct-pattern`.
 
 The VD cathode solid is a box with 16 holes cut out (a GDML subtraction);
 it is drawn as its outer box.  The cathode-mounted photon detectors

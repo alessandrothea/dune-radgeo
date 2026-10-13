@@ -11,7 +11,11 @@ If a FCL file is given:
   * #include directives are resolved automatically via $FHICL_FILE_PATH
   * radiological producers (RadioGen / Decay0Gen) → kind="radio" volumes
   * the GDML filename is extracted from AuxDetGeometry.GDML and used to
-    populate anode / opdet / cathode / struct volumes as well.
+    populate anode / opdet / cathode / fieldshaper / struct volumes as well.
+
+Non-box solids are approximated by boxes: tubes and tori by their bounding
+box, unions by one box per operand (e.g. each straight tube and corner of a
+field-shaper ring), subtractions by their outer (first) operand.
 
 Output is a JSON file readable by bki-plot and the nb_B notebook.
 """
@@ -42,6 +46,7 @@ def _gdml_volumes(gdml_path: Path,
                   opdet_pats: list[str] | None,
                   struct_pats: list[str] | None,
                   cathode_pats: list[str] | None = None,
+                  fieldshaper_pats: list[str] | None = None,
                   verbose: bool = False) -> tuple[list[VolumeEntry], str, GDMLGeometry]:
     """Parse a GDML and return (entries, detector_key, geo)."""
     print(f"[info] parsing {gdml_path.name} …", file=sys.stderr)
@@ -60,6 +65,7 @@ def _gdml_volumes(gdml_path: Path,
     ap = anode_pats  or prof["anode_patterns"]
     op = opdet_pats  or prof["opdet_patterns"]
     cp = cathode_pats or prof.get("cathode_patterns", [])
+    fp = fieldshaper_pats or prof.get("fieldshaper_patterns", [])
     sp = struct_pats or prof.get("struct_patterns", [])
 
     entries: list[VolumeEntry] = []
@@ -67,16 +73,29 @@ def _gdml_volumes(gdml_path: Path,
     def _collect(patterns, kind):
         hits = geo.find_positions(patterns, verbose=verbose)
         ok = 0
+        copies: dict[str, int] = {}
         for name, pos, rot in hits:
-            ext = geo.box_extents(name)
-            if ext is None:
-                print(f"[warn] no box extents for {kind} {name}, skipping", file=sys.stderr)
+            parts = geo.volume_parts(name)
+            if not parts:
+                print(f"[warn] no box/tube/torus solid for {kind} {name}, skipping",
+                      file=sys.stderr)
                 continue
+            copy = copies[name] = copies.get(name, -1) + 1
+            corners = []
+            for part, centre, prot, ext in parts:
+                wpos, wrot = pos + rot @ centre, rot @ prot
+                # multi-part volumes: tag each box with its solid and placement
+                meta = {"part": part, "copy": copy} if len(parts) > 1 else {}
+                entries.append(VolumeEntry(kind=kind, name=name,
+                                           pos=wpos, ext=ext, rot=wrot, meta=meta))
+                corners.append(box_corners_world(wpos, ext, wrot))
+            corners = np.vstack(corners)
+            lo, hi  = corners.min(axis=0), corners.max(axis=0)
+            c, d    = (lo + hi) / 2, hi - lo
+            nparts  = f"  ({len(parts)} parts)" if len(parts) > 1 else ""
             print(f"  {kind:<8} {name:<40s}"
-                  f"  x={pos[0]:8.2f}  y={pos[1]:8.2f}  z={pos[2]:8.2f}"
-                  f"  dx={ext[0]:8.2f}  dy={ext[1]:8.2f}  dz={ext[2]:8.2f}")
-            entries.append(VolumeEntry(kind=kind, name=name,
-                                       pos=pos, ext=ext, rot=rot, meta={}))
+                  f"  x={c[0]:8.2f}  y={c[1]:8.2f}  z={c[2]:8.2f}"
+                  f"  dx={d[0]:8.2f}  dy={d[1]:8.2f}  dz={d[2]:8.2f}{nparts}")
             ok += 1
         print(f"[info] {ok}/{len(hits)} {kind} placements", file=sys.stderr)
 
@@ -84,6 +103,8 @@ def _gdml_volumes(gdml_path: Path,
     _collect(op, "opdet")
     if cp:
         _collect(cp, "cathode")
+    if fp:
+        _collect(fp, "fieldshaper")
     if sp:
         _collect(sp, "struct")
 
@@ -166,6 +187,7 @@ def main() -> None:
     ap.add_argument("--anode-pattern",  nargs="+", default=None)
     ap.add_argument("--opdet-pattern",  nargs="+", default=None)
     ap.add_argument("--cathode-pattern", nargs="+", default=None)
+    ap.add_argument("--fieldshaper-pattern", nargs="+", default=None)
     ap.add_argument("--struct-pattern", nargs="+", default=None)
     ap.add_argument("--struct", nargs="+", default=None, metavar="VOLNAME",
                     help="exact structural volume names (anchored, overrides --struct-pattern)")
@@ -244,6 +266,7 @@ def main() -> None:
             opdet_pats=args.opdet_pattern,
             struct_pats=struct_pats,
             cathode_pats=args.cathode_pattern,
+            fieldshaper_pats=args.fieldshaper_pattern,
             verbose=args.verbose,
         )
         entries += geo_entries

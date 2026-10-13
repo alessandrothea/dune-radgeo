@@ -7,11 +7,13 @@ authors = [
     { name = "Alessandro Thea", email = "alessandro.thea@cern.ch" }
 ]
 requires-python = ">=3.9"
+# Full install: bki-extract, bki-plot and the notebook.
+# bki-extract alone needs only numpy: pip install --no-deps . numpy
 dependencies = [
-    "numpy",
-    "matplotlib",
-    "plotly",
-    "jupyter",
+    "numpy",       # bki-extract, bki-plot --list / -L
+    "matplotlib",  # bki-plot rendering, plot_ir
+    "plotly",      # notebook_plot.make_figure
+    "jupyter",     # notebooks/nb_B.ipynb, scripts/run_notebook.py
     "nbconvert",
 ]
 
