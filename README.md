@@ -184,6 +184,92 @@ See [Usage examples](#usage-examples) below.
 
 ---
 
+## bki-measure
+
+Geometric measurements on an IR (lengths in cm, world frame).
+
+```
+bki-measure <ir.json> [MEASUREMENT …]
+
+  MEASUREMENT         measurements to run (default: all)
+  --list              list the available measurements and exit
+  --detail, -d        also print each measurement's per-row table
+  --json FILE         write the results (summary, values, rows) as JSON
+```
+
+```bash
+bki-measure geo.json
+# == drift-gaps: cathode ↔ anode distance along x (drift)  [cm]
+#   top     gap   650.080  (min 650.080, max 650.080, 80 anodes)   centre-to-centre   652.085
+#           volTPCActive x-extent   650.000  (320 volumes)
+#   bottom  gap   650.080  (min 650.080, max 650.080, 160 anodes)   centre-to-centre   652.085
+#           volTPCActive x-extent   650.000  (320 volumes)
+
+bki-measure geo.json drift-gaps -d --json gaps.json   # per anode–cathode pair
+```
+
+| Measurement  | What it measures |
+|--------------|------------------|
+| `anode-cryostat-gap` | Along x, from each anode to the cryostat face behind it: top anodes to the cryostat top face, bottom anodes to the bottom face (faces of the `volCryostat` box, i.e. the inner cryostat surface; the top one encloses the gas ullage).  `gap_inner` is measured from the anode face looking into the drift volume, `gap_outer` from the face looking at the cryostat.  Top / bottom is split at the cathode plane (cryostat mid-height without cathodes).  On top, the liquid surface (bottom of `volGaseousArgon`) is shown for reference.  Needs `anode` and `struct volCryostat`. |
+| `drift-gaps` | Pairs every anode with the cathode module it faces (largest y–z overlap) and measures along x: `gap` between the facing surfaces (anode bottom − cathode top on the top side, cathode bottom − anode top on the bottom side) and `centre_dist` between centres.  Anodes above the cathode are "top", below "bottom"; per side it reports mean/min/max, flags pairs more than 0.01 cm from the median, and shows the `volTPCActive` x-extent as a cross-check.  Needs `anode` and `cathode` entries in the IR. |
+| `opdet-fc-gap` | Wall optical detectors (opdet boxes whose centre is outside the field cage's y–z envelope; the cathode-mounted ones are inside and skipped) ↔ closest field-cage surface: for each detector, the nearest field-shaper part and the shortest box-to-box distance, summarised per wall (`y-`, `y+`, `z-`, `z+`) with the closest tube types.  Tubes are stored as bounding boxes, so the gap to a facing straight tube is exact and to a corner a lower bound.  Needs `opdet` and `fieldshaper` entries in the IR. |
+| `fc-cryostat-gap` | The four field-cage side walls (y−, y+, z−, z+; top and bottom are open) ↔ cryostat walls (faces of `volCryostat`).  Each field-shaper piece is assigned to the wall it is nearest; per wall, `gap_min` is the distance from the cryostat wall to the closest piece (the standard tubes) and `gap_max` to the most recessed one (e.g. the slim tubes of the photon-detector window).  `--detail` lists the gaps per wall and piece type.  Needs `fieldshaper` and `struct volCryostat`. |
+
+### Adding a measurement
+
+Measurements live in the `duneradgeo.measurements` package, one module each:
+
+```
+src/duneradgeo/
+  measure.py                  bki-measure CLI (output, --detail, --json)
+  measurements/
+    __init__.py               auto-imports every module below
+    _core.py                  Result, @measurement registry, box helpers, X / YZ axes
+    anode_cryostat_gap.py     anode-cryostat-gap
+    drift_gaps.py             drift-gaps
+    fc_cryostat_gap.py        fc-cryostat-gap
+    opdet_fc_gap.py           opdet-fc-gap
+```
+
+To add one, create a module in `src/duneradgeo/measurements/` (name not
+starting with `_`) with a function that takes an `IRCollection`, returns a
+`Result` and is registered with `@measurement`.  It is imported
+automatically, runs by default (in module-name order) and can be selected by
+name; the CLI, `--detail` and `--json` need no changes.
+
+```python
+# src/duneradgeo/measurements/cathode_thickness.py
+"""cathode-thickness: x-extent of the cathode modules."""
+from __future__ import annotations
+
+from ..ir import IRCollection
+from ._core import X, Result, aabb, measurement, tags
+
+
+@measurement("cathode-thickness", "x-extent of the cathode modules")
+def cathode_thickness(ir: IRCollection) -> Result:
+    res = Result("cathode-thickness", "cathode module thickness along x",
+                 columns=["cathode", "dx"])
+    cathodes = ir.by_kind("cathode")
+    for tag, v in zip(tags(cathodes), cathodes):
+        lo, hi = aabb(v)                        # world-frame box corners
+        res.rows.append(dict(cathode=tag, dx=float(hi[X] - lo[X])))
+    dx = [r["dx"] for r in res.rows]
+    res.values["dx"] = max(dx) if dx else None  # headline numbers (→ JSON)
+    res.summary.append(f"dx {res.values['dx']}")  # lines printed by default
+    return res
+```
+
+`Result` fields: `summary` (printed lines), `values` (headline numbers,
+`None` when not applicable), `columns` + `rows` (the `--detail` table).
+Helpers: `aabb(v)` world-frame box corners, `tags(vols)` stable `name#k`
+labels, `overlap_area(...)` projected overlap of two boxes,
+`box_distances(...)` shortest distance from one box to many,
+`struct_box(ir, pattern)` bounding box of matching struct volumes (e.g. the cryostat).  From Python,
+`duneradgeo.measurements.run(ir, ["drift-gaps"])` returns the `Result` list.
+
+---
+
 ## Usage examples
 
 ### Extracting an IR
