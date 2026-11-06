@@ -133,7 +133,8 @@ def _box_proj_trace(center: np.ndarray, extents: np.ndarray, rot: np.ndarray,
 # Main figure builder
 # ---------------------------------------------------------------------------
 
-def make_figure(ir: IRCollection, height: int = 900) -> Any:
+def make_figure(ir: IRCollection, height: int = 900,
+                highlight: list[str] | None = None, dim: float = 0.02) -> Any:
     """
     Build an interactive Plotly figure with:
       - sub-plot (1,1)  →  3D view  (z=beam, x=drift, y=vert)
@@ -142,6 +143,10 @@ def make_figure(ir: IRCollection, height: int = 900) -> Any:
       - sub-plot (2,2)  →  X–Y  (side view)
 
     All sub-plots share one legend (volumes grouped by kind + name).
+
+    With ``highlight`` (``[LABEL=]NAME_RE[#SEL]`` specs, as for bki-plot
+    --highlight) the matching volumes get one colour and legend group per
+    spec and all others are drawn in grey with opacity ``dim``.
     """
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
@@ -162,16 +167,38 @@ def make_figure(ir: IRCollection, height: int = 900) -> Any:
 
     seen_groups: set[str] = set()
 
-    for v in ir.volumes:
-        col     = _KIND_COLOUR.get(v.kind, "grey")
-        alpha   = _KIND_OPACITY.get(v.kind, 0.20)
-        group   = f"{v.kind}:{v.name}"
+    # (colour, opacity, legend name/group) per volume
+    styles: dict[int, tuple] = {}
+    if highlight:
+        from matplotlib.colors import to_hex   # plotly has no "tab:" colours
+        from .plot import _CONTEXT_COL, _HL_FACE_ALPHA, _SURFACE_PALETTE, highlight_groups
+        labels, groups, context = highlight_groups(ir.volumes, highlight)
+        for v in context:
+            styles[id(v)] = (_CONTEXT_COL, dim, "other")
+        for k, (lbl, g) in enumerate(zip(labels, groups)):
+            col = to_hex(_SURFACE_PALETTE[k % len(_SURFACE_PALETTE)])
+            for v in g:
+                styles[id(v)] = (col, _HL_FACE_ALPHA, lbl)
+        # highlights last, so they are drawn on top
+        order = context + [v for g in groups for v in g]
+    else:
+        order = ir.volumes
+
+    for v in order:
+        if highlight:
+            col, alpha, group = styles[id(v)]
+            name = group
+        else:
+            col     = _KIND_COLOUR.get(v.kind, "grey")
+            alpha   = _KIND_OPACITY.get(v.kind, 0.20)
+            group   = f"{v.kind}:{v.name}"
+            name    = v.name
         is_first = group not in seen_groups
         seen_groups.add(group)
 
         # 3D
         fig.add_trace(_box_mesh_trace(v.pos, v.ext, v.rot, col, alpha,
-                                      v.name, group, is_first),
+                                      name, group, is_first),
                       row=1, col=1)
         fig.add_trace(_box_line_trace(v.pos, v.ext, v.rot, col, group),
                       row=1, col=1)
@@ -184,7 +211,7 @@ def make_figure(ir: IRCollection, height: int = 900) -> Any:
         ]
         for ah, av, r, c in proj_specs:
             fig.add_trace(_box_proj_trace(v.pos, v.ext, v.rot, col, alpha,
-                                          ah, av, v.name, group, False),
+                                          ah, av, name, group, False),
                           row=r, col=c)
 
     # ---- 2D axis labels ----

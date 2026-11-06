@@ -57,7 +57,7 @@ class GDMLGeometry:
         self._boxes: dict[str, np.ndarray] = {}   # solid → (dx,dy,dz) [cm]
         self._prims: dict[str, tuple]      = {}   # box/tube/torus → local AABB (centre, ext)
         self._bools: dict[str, tuple]      = {}   # boolean → (op, first, second, pos, rot)
-        self._vols:  dict[str, dict]       = {}   # vol → {solid, daughters}
+        self._vols:  dict[str, dict]       = {}   # vol → {solid, daughters: (vol, pos, rot, pv name)}
         self._world: str | None            = None
         self._solid_first: dict[str, str]  = {}   # boolean-solid → outer ref
 
@@ -71,7 +71,17 @@ class GDMLGeometry:
     @staticmethod
     def _ufact(unit: str) -> float:
         return {"cm": 1.0, "mm": 0.1, "m": 100.0, "um": 1e-4,
+                "centimeter": 1.0, "millimeter": 0.1, "meter": 100.0,
+                "micrometer": 1e-4,
                 "in": 2.54, "ft": 30.48}.get(unit.lower().strip(), 1.0)
+
+    @staticmethod
+    def _aufact(unit: str) -> float:
+        """Angle unit → radians.  GDML writers spell these differently
+        (``deg`` in the refactored geometries, ``radian``/``degree`` in ggd)."""
+        return {"rad": 1.0, "radian": 1.0, "mrad": 1e-3, "milliradian": 1e-3,
+                "deg": np.pi / 180.0, "degree": np.pi / 180.0,
+                }.get(unit.lower().strip(), 1.0)
 
     @staticmethod
     def _fval(s: str) -> float:
@@ -103,8 +113,7 @@ class GDMLGeometry:
                     self._fval(child.get("z", "0")) * u,
                 ])
             elif child.tag == "rotation":
-                unit = child.get("unit", "rad")
-                u = 1.0 if unit == "rad" else np.pi / 180.0
+                u = self._aufact(child.get("unit", "rad"))
                 self._rots[name] = _rot_matrix_rad(
                     self._fval(child.get("x", "0")) * u,
                     self._fval(child.get("y", "0")) * u,
@@ -118,7 +127,7 @@ class GDMLGeometry:
         for child in solids:
             name = child.get("name", "")
             u    = self._ufact(child.get("lunit", "mm"))
-            au   = 1.0 if child.get("aunit", "rad") == "rad" else np.pi / 180.0
+            au   = self._aufact(child.get("aunit", "rad"))
             if child.tag == "box":
                 self._boxes[name] = np.array([
                     self._fval(child.get("x", "0")) * u,
@@ -175,8 +184,7 @@ class GDMLGeometry:
             elif tag == "positionref":
                 pos = self._defs.get(child.get("ref", ""), np.zeros(3))
             elif tag == "rotation":
-                unit = child.get("unit", "rad")
-                u = 1.0 if unit == "rad" else np.pi / 180.0
+                u = self._aufact(child.get("unit", "rad"))
                 rot = _rot_matrix_rad(
                     self._fval(child.get("x", "0")) * u,
                     self._fval(child.get("y", "0")) * u,
@@ -197,7 +205,7 @@ class GDMLGeometry:
         # this combination centres the field-shaper rings on the TPC, joins
         # their corner tori to the tube ends and lays the cathode X-ARAPUCAs
         # flat in the cathode plane.
-        return volref, pos, rot.T
+        return volref, pos, rot.T, pv.get("name")
 
     def _parse_structure(self, root):
         structure = root.find("structure")
@@ -213,9 +221,9 @@ class GDMLGeometry:
                 if child.tag == "solidref":
                     solid = child.get("ref")
                 elif child.tag == "physvol":
-                    vref, pos, rot = self._parse_physvol(child)
+                    vref, pos, rot, pvname = self._parse_physvol(child)
                     if vref:
-                        daughters.append((vref, pos, rot))
+                        daughters.append((vref, pos, rot, pvname))
             self._vols[name] = {"solid": solid, "daughters": daughters}
 
     def _parse_setup(self, root):
@@ -232,10 +240,21 @@ class GDMLGeometry:
         vol_patterns: list[str],
         world_vol: str | None = None,
         verbose: bool = False,
-    ) -> list[tuple[str, np.ndarray, np.ndarray]]:
+        with_path: bool = False,
+    ) -> list[tuple]:
         """
         Return (name, world_pos, world_rot) for every placement of volumes
         whose name matches any pattern in vol_patterns.
+
+        With ``with_path`` each tuple also carries the placement path below
+        the world volume, ``volA:0/volB:3/name:1``, where ``:k`` counts the
+        placements of that volume within its parent in GDML order.  It does
+        not depend on the patterns, so it identifies a placement across
+        extractions of the same (or a locally edited) GDML.  Two more items
+        follow: the physvol name of the placement and the physvol names
+        along the path, ``pvA/pvB/pv`` (None and "" when the GDML leaves
+        physvols unnamed, as the refactored geometries do; unnamed steps of
+        a partly named path are empty).
         """
         patterns = [re.compile(p) for p in vol_patterns]
         world    = world_vol or self._world
@@ -255,7 +274,7 @@ class GDMLGeometry:
         # BFS backward to find all ancestors of targets
         parent_of: dict[str, set[str]] = defaultdict(set)
         for pname, pdata in self._vols.items():
-            for (dname, _, _) in pdata["daughters"]:
+            for (dname, *_) in pdata["daughters"]:
                 parent_of[dname].add(pname)
 
         can_contain: set[str] = set(target_vols)
@@ -272,23 +291,32 @@ class GDMLGeometry:
         if verbose:
             print(f"  [dbg] {len(can_contain)} vols in ancestor set", file=sys.stderr)
 
-        results: list[tuple[str, np.ndarray, np.ndarray]] = []
+        results: list[tuple] = []
 
-        def walk(vol_name, w_pos, w_rot, ancestry):
+        def walk(vol_name, w_pos, w_rot, ancestry, path, pvname, pvpath):
             if vol_name in ancestry:
                 return
             if vol_name in target_vols:
-                results.append((vol_name, w_pos.copy(), w_rot.copy()))
+                hit = (vol_name, w_pos.copy(), w_rot.copy())
+                pvp = pvpath if pvpath.strip("/") else ""
+                results.append(hit + (path, pvname, pvp) if with_path else hit)
                 # keep recursing: a target may contain other targets
             if vol_name not in self._vols or vol_name not in can_contain:
                 return
             new_anc = ancestry | {vol_name}
-            for dname, local_pos, local_rot in self._vols[vol_name]["daughters"]:
+            seen: dict[str, int] = defaultdict(int)
+            for dname, local_pos, local_rot, dpv in self._vols[vol_name]["daughters"]:
+                # count every sibling, pruned or not, so k is pattern-independent
+                k = seen[dname]
+                seen[dname] += 1
                 if dname not in can_contain:
                     continue
-                walk(dname, w_pos + w_rot @ local_pos, w_rot @ local_rot, new_anc)
+                step = f"{dname}:{k}"
+                walk(dname, w_pos + w_rot @ local_pos, w_rot @ local_rot, new_anc,
+                     f"{path}/{step}" if path else step, dpv,
+                     f"{pvpath}/{dpv or ''}" if path else (dpv or ""))
 
-        walk(world, np.zeros(3), np.eye(3), frozenset())
+        walk(world, np.zeros(3), np.eye(3), frozenset(), "", None, "")
         return results
 
     # -- utilities ---------------------------------------------------------

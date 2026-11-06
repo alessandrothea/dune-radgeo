@@ -6,12 +6,22 @@ Usage:
   bki-extract job.fcl       --out ir.json
   bki-extract geometry.gdml --out ir.json \\
       --anode-pattern 'volAnodePlate' --opdet-pattern '^volArapuca'
+  bki-extract geometry.gdml --out ir.json --frame volEnclosureTPC
 
 If a FCL file is given:
   * #include directives are resolved automatically via $FHICL_FILE_PATH
-  * radiological producers (RadioGen / Decay0Gen) → kind="radio" volumes
+  * radiological producers (RadioGen / Decay0Gen) → kind="radio" volumes,
+    and each producer's full FHiCL table → the IR's top-level "producers"
   * the GDML filename is extracted from AuxDetGeometry.GDML and used to
     populate anode / opdet / cathode / fieldshaper / struct volumes as well.
+
+The refactored and the ggd-generated VD GDMLs use the same volume names but
+nest the cryostat differently (ggd adds volSupportEnc/volEnclosureCryostat),
+so their world coordinates differ by a global offset.  --frame expresses
+every volume in the frame of one placed volume (e.g. volEnclosureTPC) and
+records its world placement in the IR, so IRs of both kinds overlay.
+--with-passive adds the profile's passive material (steel shell, insulation,
+support structure, shielding, cavern) as struct volumes.
 
 Non-box solids are approximated by boxes: tubes and tori by their bounding
 box, unions by one box per operand (e.g. each straight tube and corner of a
@@ -22,6 +32,8 @@ Output is a JSON file readable by bki-plot and the nb_B notebook.
 from __future__ import annotations
 
 import argparse
+import math
+import re
 import sys
 import time
 from pathlib import Path
@@ -32,7 +44,7 @@ from ._draw import box_corners_world
 from ._fcl import (FhiclParser, default_fcl_cache_dir, expand_fcl,
                    producer_volumes, select_producers)
 from ._gdml import GDMLGeometry
-from ._profiles import detect_profile, get_profile
+from ._profiles import detect_profile, get_profile, profile_detector
 from ._search import gdml_from_fcl, resolve_search_path
 from .ir import IRCollection, VolumeEntry
 
@@ -47,6 +59,7 @@ def _gdml_volumes(gdml_path: Path,
                   struct_pats: list[str] | None,
                   cathode_pats: list[str] | None = None,
                   fieldshaper_pats: list[str] | None = None,
+                  passive: bool = False,
                   verbose: bool = False) -> tuple[list[VolumeEntry], str, GDMLGeometry]:
     """Parse a GDML and return (entries, detector_key, geo)."""
     print(f"[info] parsing {gdml_path.name} …", file=sys.stderr)
@@ -58,7 +71,7 @@ def _gdml_volumes(gdml_path: Path,
     profile_key = detect_profile(geo.volume_names)
     _, prof      = get_profile(profile_key)
     if profile_key:
-        print(f"[info] detected {prof['label']}", file=sys.stderr)
+        print(f"[info] detected {prof['label']}  (profile {profile_key})", file=sys.stderr)
     else:
         print("[warn] unknown detector type; using generic patterns", file=sys.stderr)
 
@@ -71,10 +84,10 @@ def _gdml_volumes(gdml_path: Path,
     entries: list[VolumeEntry] = []
 
     def _collect(patterns, kind):
-        hits = geo.find_positions(patterns, verbose=verbose)
+        hits = geo.find_positions(patterns, verbose=verbose, with_path=True)
         ok = 0
         copies: dict[str, int] = {}
-        for name, pos, rot in hits:
+        for name, pos, rot, path, pvname, pvpath in hits:
             parts = geo.volume_parts(name)
             if not parts:
                 print(f"[warn] no box/tube/torus solid for {kind} {name}, skipping",
@@ -86,6 +99,11 @@ def _gdml_volumes(gdml_path: Path,
                 wpos, wrot = pos + rot @ centre, rot @ prot
                 # multi-part volumes: tag each box with its solid and placement
                 meta = {"part": part, "copy": copy} if len(parts) > 1 else {}
+                meta["path"] = path
+                if pvname:
+                    meta["pv"] = pvname
+                if pvpath:
+                    meta["pvpath"] = pvpath
                 entries.append(VolumeEntry(kind=kind, name=name,
                                            pos=wpos, ext=ext, rot=wrot, meta=meta))
                 corners.append(box_corners_world(wpos, ext, wrot))
@@ -107,8 +125,31 @@ def _gdml_volumes(gdml_path: Path,
         _collect(fp, "fieldshaper")
     if sp:
         _collect(sp, "struct")
+    if passive:
+        pp = prof.get("passive_patterns", [])
+        if pp:
+            _collect(pp, "struct")
+        else:
+            print("[warn] --with-passive: profile has no passive patterns", file=sys.stderr)
 
-    return entries, (profile_key or ""), geo
+    return entries, profile_detector(profile_key), geo
+
+
+def _to_frame(entries: list[VolumeEntry], geo: GDMLGeometry, volume: str) -> dict:
+    """Re-express `entries` (world frame) in the frame of `volume`, in place.
+
+    `volume` must be placed exactly once.  Returns the IR frame record."""
+    hits = geo.find_positions([f"^{re.escape(volume)}$"], with_path=True)
+    if len(hits) != 1:
+        sys.exit(f"[error] --frame {volume}: expected exactly one placement, "
+                 f"found {len(hits)}")
+    _, t, R, path, *_ = hits[0]
+    for e in entries:
+        e.pos = R.T @ (e.pos - t)
+        e.rot = R.T @ e.rot
+    print(f"[info] frame {volume} at x={t[0]:.2f} y={t[1]:.2f} z={t[2]:.2f}"
+          f"  ({path})", file=sys.stderr)
+    return {"volume": volume, "path": path, "pos": t.tolist(), "rot": R.tolist()}
 
 
 # ---------------------------------------------------------------------------
@@ -134,12 +175,16 @@ def _fcl_radio_volumes(doc: dict,
                        prefix: str = "",
                        all_configured: bool = False,
                        select_re: str | None = None,
-                       containment: float = 0.99) -> list[VolumeEntry]:
-    """Build radio VolumeEntry rows from an already-parsed FCL document."""
+                       containment: float = 0.99) -> tuple[list[VolumeEntry], dict]:
+    """Build radio VolumeEntry rows from an already-parsed FCL document.
+
+    Returns (entries, producers): the rows, and the full FHiCL table of every
+    selected producer keyed by label (kept even when no row resolves)."""
     table, labels = select_producers(doc, top_order,
                                      prefix=prefix,
                                      all_configured=all_configured,
                                      select_re=select_re)
+    producers = {name: _json_safe(table[name]) for name in labels}
     entries: list[VolumeEntry] = []
     for name in labels:
         try:
@@ -161,13 +206,27 @@ def _fcl_radio_volumes(doc: dict,
             rot = np.eye(3)
             meta = {k: r.get(k) for k in
                     ("source", "node", "nuclide", "module_type", "BqPercc",
-                     "rate", "surface", "T0", "T1", "distrib_x", "x_eff")
+                     "rate", "surface", "T0", "T1",
+                     "distrib_x", "x_range", "x_eff_range",
+                     "distrib_y", "y_range", "y_eff_range",
+                     "distrib_z", "z_range", "z_eff_range", "eff_containment")
                     if r.get(k) is not None}
             meta["index"] = r["index"]
             entries.append(VolumeEntry(kind="radio", name=name,
                                        pos=pos, ext=ext, rot=rot, meta=meta))
     print(f"[info] {len(entries)} radio volume entries", file=sys.stderr)
-    return entries
+    return entries, producers
+
+
+def _json_safe(v):
+    """Deep copy of a parsed FHiCL value with ±inf/nan as strings (strict JSON)."""
+    if isinstance(v, dict):
+        return {k: _json_safe(x) for k, x in v.items()}
+    if isinstance(v, list):
+        return [_json_safe(x) for x in v]
+    if isinstance(v, float) and not math.isfinite(v):
+        return str(v)
+    return v
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +250,13 @@ def main() -> None:
     ap.add_argument("--struct-pattern", nargs="+", default=None)
     ap.add_argument("--struct", nargs="+", default=None, metavar="VOLNAME",
                     help="exact structural volume names (anchored, overrides --struct-pattern)")
+    ap.add_argument("--with-passive", action="store_true",
+                    help="also extract the profile's passive material "
+                         "(steel shell, insulation, support, shielding, cavern) as struct")
+    ap.add_argument("--frame", default=None, metavar="VOLNAME",
+                    help="express positions in the frame of this (singly placed) "
+                         "volume, e.g. volCryostat or volEnclosureTPC, instead of "
+                         "the world")
     # FCL options
     ap.add_argument("--prefix",         default="",
                     help="only producers whose label starts with this")
@@ -199,7 +265,7 @@ def main() -> None:
     ap.add_argument("--all-configured", action="store_true",
                     help="include producers not on any trigger path")
     ap.add_argument("--containment",    type=float, default=0.99,
-                    help="distrib_x containment fraction (default 0.99)")
+                    help="distrib_x/y/z containment fraction (default 0.99)")
     ap.add_argument("--no-geometry",    action="store_true",
                     help="skip GDML parsing even when a FCL is given")
     ap.add_argument("--gdml",           default=None,
@@ -267,6 +333,7 @@ def main() -> None:
             struct_pats=struct_pats,
             cathode_pats=args.cathode_pattern,
             fieldshaper_pats=args.fieldshaper_pattern,
+            passive=args.with_passive,
             verbose=args.verbose,
         )
         entries += geo_entries
@@ -274,8 +341,9 @@ def main() -> None:
             source = str(gdml_path)
 
     # ---- FCL input: radio volumes (geo available for volume_rand/gen) ----
+    producers: dict = {}
     if is_fcl:
-        entries += _fcl_radio_volumes(
+        radio, producers = _fcl_radio_volumes(
             fcl_doc, fcl_order,
             geo=geo,
             prefix=args.prefix,
@@ -283,13 +351,23 @@ def main() -> None:
             select_re=args.select,
             containment=args.containment,
         )
+        entries += radio
 
     if not entries:
         sys.exit("[error] nothing extracted — check patterns or use --verbose")
 
-    ir = IRCollection(source=source, detector=detector_key, volumes=entries)
+    frame = None
+    if args.frame and args.frame != "world":
+        if geo is None:
+            sys.exit("[error] --frame needs the GDML (drop --no-geometry)")
+        frame = _to_frame(entries, geo, args.frame)
+
+    ir = IRCollection(source=source, detector=detector_key, volumes=entries,
+                      frame=frame, producers=producers)
     ir.save(args.out)
-    print(f"[info] wrote {len(entries)} volume entries to {args.out}", file=sys.stderr)
+    print(f"[info] wrote {len(entries)} volume entries"
+          + (f" and {len(producers)} producer configs" if producers else "")
+          + f" to {args.out}", file=sys.stderr)
 
 
 if __name__ == "__main__":

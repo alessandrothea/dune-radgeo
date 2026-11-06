@@ -21,6 +21,7 @@ dependencies = [
 bki-extract = "duneradgeo.extract:main"
 bki-plot    = "duneradgeo.plot:main"
 bki-measure = "duneradgeo.measure:main"
+bki-distrib = "duneradgeo.distrib:main"
 
 [build-system]
 requires = ["hatchling"]

@@ -11,12 +11,13 @@ import numpy as np
 
 @dataclass
 class VolumeEntry:
-    """One placed detector or radiological volume in world coordinates."""
+    """One placed detector or radiological volume in the IR frame
+    (the world, unless IRCollection.frame names another volume)."""
     kind: str          # "anode" | "opdet" | "cathode" | "fieldshaper" | "struct" | "radio"
     name: str          # logical-volume or producer name
-    pos:  np.ndarray   # (3,) world-frame centre [cm]
+    pos:  np.ndarray   # (3,) centre in the IR frame [cm]
     ext:  np.ndarray   # (3,) full extents dx,dy,dz [cm]
-    rot:  np.ndarray   # (3,3) world-frame rotation matrix
+    rot:  np.ndarray   # (3,3) rotation matrix in the IR frame
     meta: dict         # kind-specific metadata; multi-part solids: part, copy
 
     # ------------------------------------------------------------------
@@ -49,6 +50,13 @@ class IRCollection:
     detector: str                  = ""   # "vd" | "hd" | ""
     volumes:  list[VolumeEntry]    = field(default_factory=list)
     version:  str                  = "1"
+    # None: world coordinates.  Otherwise {"volume", "path", "pos", "rot"}:
+    # the volume whose frame pos/rot are given in, and its world placement
+    # (world = pos + rot @ local), so IRs of differently nested GDMLs overlay.
+    frame:    dict | None          = None
+    # Full FHiCL configuration of each radiological producer, keyed by module
+    # label (FCL input only).  Radio volume rows refer to it by name.
+    producers: dict[str, dict]     = field(default_factory=dict)
 
     # ------------------------------------------------------------------
     def save(self, path: str | Path) -> None:
@@ -56,8 +64,12 @@ class IRCollection:
             "version":  self.version,
             "source":   self.source,
             "detector": self.detector,
-            "volumes":  [v.to_dict() for v in self.volumes],
         }
+        if self.frame is not None:
+            d["frame"] = self.frame
+        if self.producers:
+            d["producers"] = self.producers
+        d["volumes"] = [v.to_dict() for v in self.volumes]
         Path(path).write_text(json.dumps(d, indent=2))
 
     @classmethod
@@ -68,6 +80,8 @@ class IRCollection:
             source=d.get("source", ""),
             detector=d.get("detector", ""),
             volumes=[VolumeEntry.from_dict(v) for v in d.get("volumes", [])],
+            frame=d.get("frame"),
+            producers=d.get("producers", {}),
         )
 
     # -- convenience filters -------------------------------------------

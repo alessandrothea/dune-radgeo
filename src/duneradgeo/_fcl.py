@@ -327,15 +327,25 @@ def _gaus(x, mean=0.0, sigma=1.0):
     return np.exp(-0.5 * ((x - mean) / sigma) ** 2)
 
 
-def x_interval(formula: str, x0: float, x1: float,
-               containment: float, npts: int = 400001) -> tuple:
-    """Shortest [a,b] ⊂ [x0,x1] containing `containment` fraction of the pdf."""
+def eval_tf1(formula: str, x: np.ndarray) -> np.ndarray:
+    """
+    Evaluate a TF1 formula string (as in RadioGen/Decay0Gen ``distrib_x``) at
+    `x`, with negative values clipped to 0 (the generator samples it as a pdf).
+    Only the TMath functions in _TF1_MAP are translated.
+    """
     expr = formula
     for a, b in _TF1_MAP:
         expr = expr.replace(a, b)
+    x = np.asarray(x, dtype=float)
+    f = eval(expr, {"__builtins__": {}, "np": np, "_gaus": _gaus, "x": x})   # noqa: S307
+    return np.clip(np.broadcast_to(f, x.shape).astype(float), 0, None)
+
+
+def x_interval(formula: str, x0: float, x1: float,
+               containment: float, npts: int = 400001) -> tuple:
+    """Shortest [a,b] ⊂ [x0,x1] containing `containment` fraction of the pdf."""
     x = np.linspace(x0, x1, npts)
-    f = eval(expr, {"np": np, "_gaus": _gaus, "x": x})   # noqa: S307
-    f = np.clip(np.broadcast_to(f, x.shape).astype(float), 0, None)
+    f = eval_tf1(formula, x)
     c = np.concatenate([[0.0], np.cumsum(0.5 * (f[1:] + f[:-1]) * np.diff(x))])
     c /= c[-1]
     j  = np.searchsorted(c, c + containment)
@@ -396,6 +406,7 @@ def _world_aabb_per_hit(geo, patterns: list[str]) -> list[tuple]:
 # ---------------------------------------------------------------------------
 
 BOX_KEYS = ("X0", "X1", "Y0", "Y1", "Z0", "Z1")
+DISTRIB_AXES = ("x", "y", "z")
 RADIO_MODULES = ("RadioGen", "Decay0Gen")
 
 
@@ -429,7 +440,10 @@ def producer_volumes(name: str, cfg: dict, geo=None,
 
     Returns a list of dicts with keys:
       producer, module_type, index, source, nuclide, material,
-      lo [x,y,z], hi [x,y,z], surface, T0, T1, BqPercc, rate, distrib_x, x_eff
+      lo [x,y,z], hi [x,y,z], surface, T0, T1, BqPercc, rate, and per axis
+      with a distribution: distrib_<ax>, <ax>_range (full box range on that
+      axis), <ax>_eff_range (effective range: containment interval; becomes lo/hi on that axis),
+      and eff_containment (the containment fraction used for the effective ranges)
     """
     mt   = cfg.get("module_type")
     rows = []
@@ -493,14 +507,23 @@ def producer_volumes(name: str, cfg: dict, geo=None,
         for r in rows:
             r.setdefault("nuclide", iso)
 
-    if "distrib_x" in cfg:
+    # BaseRadioGen (larsimrad) samples each axis independently: distrib_<ax> is a
+    # 1D TF1 in the variable x, drawn with GetRandom over the box range on that
+    # axis (X0..X1, the volume_rand bounding box, or the volume_gen node's box).
+    for ax, axis in enumerate(DISTRIB_AXES):
+        key = f"distrib_{axis}"
+        if key not in cfg:
+            continue
         for r in rows:
-            r["distrib_x"] = cfg["distrib_x"]
-            if r["lo"] is not None and r["lo"][0] is not None:
-                a, b = x_interval(cfg["distrib_x"], r["lo"][0], r["hi"][0], containment)
-                r["x_eff"] = [a, b]
-                r["lo"] = [a] + r["lo"][1:]
-                r["hi"] = [b] + r["hi"][1:]
+            r[key] = cfg[key]
+            if r["lo"] is not None and r["lo"][ax] is not None:
+                lo, hi = r["lo"][ax], r["hi"][ax]
+                a, b = x_interval(cfg[key], lo, hi, containment)
+                r[f"{axis}_range"] = [lo, hi]     # range distrib_<ax> is sampled over
+                r[f"{axis}_eff_range"] = [a, b]   # effective range: shortest containment interval
+                r["eff_containment"] = containment  # fraction of the pdf in the eff range
+                r["lo"] = r["lo"][:ax] + [a] + r["lo"][ax + 1:]
+                r["hi"] = r["hi"][:ax] + [b] + r["hi"][ax + 1:]
 
     for r in rows:
         if r["lo"] is not None and None not in r["lo"]:
