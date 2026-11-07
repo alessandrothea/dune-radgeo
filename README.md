@@ -413,7 +413,12 @@ generated distribution (blue), shades the generated effective range and
 marks the formula's (dotted), one distribution per page of the PDF. When the
 effective ranges are much narrower than the full range, a zoomed view on
 them is added below. Producers that share a formula and range share a page,
-which lists them. Coordinates are world coordinates, which is what the
+which lists them. Each page is headed by the producers' common name and
+their nuclides (`UpperMesh1x8x14 · x profile, 7 producers (K42, Po218, …)`;
+a single producer gives its own name), above a line saying where the
+distribution sits (`layer at x ≈ -320.9 cm, 99% in 4.3 cm`, or the range
+holding 99% of it), its sampling volume and the source FHiCL. `--list`
+prints the same name on each `[n]` line. Coordinates are world coordinates, which is what the
 generator uses, even for IRs written with `--frame`.
 
 ```
@@ -435,13 +440,14 @@ bki-distrib <ir.json> [options]
   --no-zoom           no zoomed view on the effective ranges (default: added
                       below the plot when they are narrower than half the
                       full range; window = their span ± 25%)
-  --title TEXT        figure title
+  --title TEXT        text ending each page subtitle (default: the source FHiCL
+                      name)
 ```
 
 ```bash
 bki-distrib radbkg.json --log
 bki-distrib radbkg.json --list --radio 'UpperMesh'
-# [0] distrib_x  range [-425.120, 425.200]  containment 0.99  npx 100
+# [0] UpperMesh1x8x14 · distrib_x  range [-425.120, 425.200]  containment 0.99  npx 100
 #     eff_range (generated) [-323.082, -318.753]  (measured 0.9900)
 #     formula eff range     [-321.704, -318.328]  (measured 0.9900)
 #     surface: plane_x@-320.917

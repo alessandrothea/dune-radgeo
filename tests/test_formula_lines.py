@@ -11,7 +11,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _runner import run_tests  # noqa: E402
 
-from duneradgeo.distrib import formula_lines, raw_formula_lines  # noqa: E402
+from duneradgeo.distrib import (DistribGroup, formula_lines, group_label,  # noqa: E402
+                                page_subtitle, page_title, raw_formula_lines)
 
 # the upper-mesh and bulk K42 profiles of tests/test_tf1.py
 MESH = "(7.2257e+4*TMath::Exp(-(x+320.)*(x+320.)/(2.*0.5*0.5)))+1."
@@ -164,6 +165,49 @@ def test_formula_lines_signs():
 def test_formula_lines_subtracted_sum():
     assert formula_lines("1-(x-2)") == ["f(x) = 1", "       - (x-2)"]
     assert formula_lines("-(x+1)") == ["f(x) = -(x+1)"]
+
+
+def _group(producers, surfaces=("bulk",), eff=(-425.12, 415.96)):
+    return DistribGroup(axis="x", formula="1", range_=(-425.12, 425.2), eff=eff,
+                        formula_eff=eff, containment=0.99, npx=100,
+                        surfaces=list(surfaces), sources=["volume_rand:volCryostat"],
+                        producers={n: [nu, 1] for n, nu in producers})
+
+
+MESH_PRODUCERS = [("K42From42ArGenInUpperMesh1x8x14", "K42"),
+                  ("Rn222ChainFromPo218GenInUpperMesh1x8x14", "Po218"),
+                  ("Rn222ChainFromBi210GenInUpperMesh1x8x14", "Bi210+Po210")]
+
+
+def test_group_label():
+    assert group_label(_group(MESH_PRODUCERS)) == "UpperMesh1x8x14"
+    assert group_label(_group([("Rn222ChainPo218GenInLAr", "Po218")])) == \
+        "Rn222ChainPo218GenInLAr"
+    # a shared part that is not a word: fall back to the count
+    assert group_label(_group([("FooA1", "K40"), ("BarB1", "K40")])) == "2 producers"
+    # the common suffix starts mid-word: cut to the next CamelCase word
+    assert group_label(_group([("AlphaCathodeGrid", "K40"),
+                               ("BetaCathodeGrid", "U238")])) == "CathodeGrid"
+
+
+def test_page_title():
+    g = _group(MESH_PRODUCERS)
+    assert page_title(g) == ("UpperMesh1x8x14 · x profile, 3 producers "
+                             "(K42, Po218, Bi210+Po210)")
+    assert page_title(g, 1) == "UpperMesh1x8x14 · x profile, 3 producers (K42, …)"
+    assert page_title(_group([("Rn222ChainPo218GenInLAr", "Po218")])) == \
+        "Rn222ChainPo218GenInLAr · x profile (Po218)"
+    assert page_title(_group([("FooA1", "K40"), ("BarB1", "K40")])) == \
+        "x profile, 2 producers (K40)"
+
+
+def test_page_subtitle():
+    layer = _group(MESH_PRODUCERS, surfaces=["plane_x@-320.917"],
+                   eff=(-323.082, -318.753))
+    assert page_subtitle(layer, "f.fcl") == ("layer at x ≈ -320.9 cm, 99% in 4.3 cm"
+                                             "  ·  volume_rand:volCryostat  ·  f.fcl")
+    assert page_subtitle(_group(MESH_PRODUCERS)) == \
+        "bulk, 99% in [-425.1, 416.0] cm  ·  volume_rand:volCryostat"
 
 
 if __name__ == "__main__":

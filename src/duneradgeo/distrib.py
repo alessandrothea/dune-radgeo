@@ -163,9 +163,79 @@ def _fmt_range(r, w: int = 0) -> str:
     return f"[{r[0]:{w}.3f}, {r[1]:{w}.3f}]"
 
 
+_LABEL_LINK = re.compile(r"^(?:Gen)?(?:In|At|From)(?=[A-Z0-9])")
+
+
+def _common_suffix(names: list[str]) -> str:
+    s = names[0]
+    for name in names[1:]:
+        n = 0
+        while n < min(len(s), len(name)) and s[-1 - n] == name[-1 - n]:
+            n += 1
+        s = s[len(s) - n:]
+    return s
+
+
+def group_label(g: DistribGroup) -> str:
+    """
+    Short name of the group, from its producer names: the name itself for a
+    single producer, else the part the names end with, from a CamelCase word
+    on and without a leading Gen/In/At/From (``UpperMesh1x8x14`` for
+    ``K42From42ArGenInUpperMesh1x8x14``, ``Rn222ChainFromPo218GenInUpperMesh1x8x14``,
+    ...).  "N producers" when the names share no such part.
+    """
+    names = list(g.producers)
+    if len(names) == 1:
+        return names[0]
+    m = re.search(r"[A-Z]", _common_suffix(names)) if names else None
+    label = _LABEL_LINK.sub("", m.string[m.start():]) if m else ""
+    return label if len(label) >= 3 else f"{len(names)} producers"
+
+
+def nuclides(g: DistribGroup) -> list[str]:
+    """The producers' nuclides, each once, in producer order."""
+    out = []
+    for nucl, _ in g.producers.values():
+        if nucl and nucl not in out:
+            out.append(nucl)
+    return out
+
+
+def page_title(g: DistribGroup, nmax: int | None = None) -> str:
+    """'<label> · x profile, N producers (nuclides)'; at most `nmax`
+    nuclides, then '…'."""
+    label, nucl, n = group_label(g), nuclides(g), len(g.producers)
+    if nmax is not None and len(nucl) > nmax:
+        nucl = nucl[:nmax] + ["…"]
+    what = f"{g.axis} profile"
+    if n > 1:
+        what += f", {n} producers"
+    if nucl:
+        what += f" ({', '.join(nucl)})"
+    return what if label == f"{n} producers" else f"{label} · {what}"
+
+
+def page_subtitle(g: DistribGroup, source: str = "") -> str:
+    """Where the distribution sits, its sampling volume(s) and `source`,
+    joined by ' · '."""
+    pct = f"{100 * g.containment:g}%"
+    lo, hi = g.eff
+    plane = [s for s in g.surfaces if s.startswith(f"plane_{g.axis}@")]
+    if plane:
+        where = (f"layer at {g.axis} ≈ {float(plane[0].split('@')[1]):.1f} cm, "
+                 f"{pct} in {hi - lo:.1f} cm")
+    else:
+        where = f"{pct} in [{lo:.1f}, {hi:.1f}] cm"
+        other = [_surface_text(s) for s in g.surfaces]
+        if other:
+            where = f"{', '.join(other)}, {where}"
+    parts = [where] + list(g.sources) + ([source] if source else [])
+    return "  ·  ".join(parts)
+
+
 def print_groups(groups: list[DistribGroup]) -> None:
     for i, g in enumerate(groups):
-        print(f"[{i}] {g.label()}  range {_fmt_range(g.range_)}"
+        print(f"[{i}] {group_label(g)} · {g.label()}  range {_fmt_range(g.range_)}"
               f"  containment {g.containment:g}  npx {g.npx}")
         try:
             frac_gen, frac_formula = fractions(g)
@@ -480,14 +550,25 @@ def _draw_side_panel(fig, g: DistribGroup, frac: tuple | None) -> None:
              va="top", linespacing=_LS_MONO)
 
 
+def _fit_text(fig, y: float, make, n: int, **kw) -> None:
+    """Draw make(k) at (_LEFT, y) for the largest k <= n whose text ends
+    left of _RIGHT (make(None) is the full text, tried first)."""
+    renderer = fig.canvas.get_renderer()
+    for k in [None] + list(range(n - 1, -1, -1)):
+        t = fig.text(_LEFT, y, make(k), va="baseline", **kw)
+        if (k == 0 or t.get_window_extent(renderer).x1
+                <= _RIGHT * fig.bbox.width):
+            return
+        t.remove()
+
+
 def _draw_page(fig, g: DistribGroup, log: bool, source: str,
                page: int, npages: int, zoom: bool = True) -> None:
     """One distribution on `fig`: title, plot (+ zoom), formula box, side panel."""
-    where = ", ".join(_surface_text(s) for s in g.surfaces) or "—"
-    fig.text(_LEFT, _TITLE_Y, f"distrib_{g.axis}   ·   {where}",
-             fontsize=15, fontweight="bold", va="baseline")
-    if source:
-        fig.text(_LEFT, _SOURCE_Y, source, fontsize=10, color=_GREY, va="baseline")
+    _fit_text(fig, _TITLE_Y, lambda k: page_title(g, k), len(nuclides(g)),
+              fontsize=15, fontweight="bold")
+    fig.text(_LEFT, _SOURCE_Y, page_subtitle(g, source), fontsize=10,
+             color=_GREY, va="baseline")
     fig.text(_RIGHT, _FOOT_Y, f"{page} / {npages}", fontsize=9, color=_GREY, ha="right")
     box_top = _draw_formula_box(fig, g)
     frac = _draw_plots(fig, g, log, zoom, bottom=box_top + _XLABEL_H)
@@ -495,11 +576,13 @@ def _draw_page(fig, g: DistribGroup, log: bool, source: str,
 
 
 def plot_groups(groups: list[DistribGroup], out_path: str, title: str = "",
-                log: bool = False, zoom: bool = True) -> list[str]:
+                log: bool = False, zoom: bool = True,
+                doc_title: str = "") -> list[str]:
     """
     One page per distribution: a multi-page PDF when `out_path` ends in .pdf,
     otherwise one file per distribution (<stem>_NN<suffix>).
-    `title` is printed under each page heading.  Returns the files written.
+    `title` (e.g. the source FHiCL) ends the subtitle of each page;
+    `doc_title` is the PDF's Title metadata.  Returns the files written.
     """
     plt = import_mpl("--list works without it")
     from matplotlib.backends.backend_pdf import PdfPages
@@ -518,7 +601,7 @@ def plot_groups(groups: list[DistribGroup], out_path: str, title: str = "",
                 fig = _page(i, g)
                 pdf.savefig(fig)
                 plt.close(fig)
-            pdf.infodict()["Title"] = title or "distrib_* position profiles"
+            pdf.infodict()["Title"] = doc_title or "distrib_* position profiles"
         written = [str(out)]
         print(f"[info] wrote {n} page(s) to {out}", file=sys.stderr)
     else:
@@ -568,7 +651,8 @@ def main() -> None:
                     help="no zoomed view on the effective range (by default it is "
                          "added below the plot when the effective range is "
                          "narrower than half the full range)")
-    ap.add_argument("--title", default=None, help="figure title")
+    ap.add_argument("--title", default=None,
+                    help="text ending each page subtitle (default: the source FHiCL name)")
     args = ap.parse_args()
 
     ir_path = Path(args.ir_file)
@@ -619,10 +703,10 @@ def main() -> None:
         return
 
     out_path = args.out or str(ir_path.with_name(ir_path.stem + "_distrib.pdf"))
-    title = args.title or (f"source: {Path(ir.source).name}"
-                           if ir.source else ir_path.stem)
+    title = args.title or (Path(ir.source).name if ir.source else ir_path.stem)
     try:
-        plot_groups(groups, out_path, title=title, log=args.log, zoom=not args.no_zoom)
+        plot_groups(groups, out_path, title=title, log=args.log, zoom=not args.no_zoom,
+                    doc_title=f"{ir_path.stem}: distrib_* profiles")
     except ImportError as exc:
         sys.exit(f"[error] {exc}")
 
