@@ -21,6 +21,7 @@ from contextlib import contextmanager
 import numpy as np
 
 from ._gdml import GeometryBase
+from ._root import ROOTUnavailable, import_root
 
 # TGeo classes taken as primitives, i.e. what the pure-Python backend handles
 # (GDML box, tube, torus).  Their local bounding box is ROOT's own.
@@ -34,15 +35,9 @@ _QUIET = re.compile(r"Unsupported GDML Tag Used|^Info in <")
 
 
 def _import_root():
-    try:
-        import ROOT
-    except ImportError as exc:
-        raise RuntimeError(
-            "the 'root' GDML backend needs PyROOT (dunesw container, or "
-            "`uv sync` standalone)") from exc
-    ROOT.gROOT.SetBatch(True)
+    ROOT = import_root("the 'root' GDML backend")
     if not hasattr(ROOT, "TGeoManager") or ROOT.gSystem.Load("libGdml") < 0:
-        raise RuntimeError(
+        raise ROOTUnavailable(
             f"ROOT {ROOT.gROOT.GetVersion()} has no TGeo/GDML support "
             "(libGeom/libGdml missing); use --gdml-backend python")
     return ROOT
@@ -120,6 +115,13 @@ class RootGDMLGeometry(GeometryBase):
     def _add_shape(self, shape) -> None:
         name = shape.GetName()
         cls  = shape.ClassName()
+        if hasattr(shape, "GetDX"):
+            # ROOT's own bounding box, for every shape class (composites
+            # included): the box BaseRadioGen samples volume_gen nodes in
+            o = shape.GetOrigin()
+            self._shape_bbox[name] = (
+                np.array([o[0], o[1], o[2]], dtype=float),
+                2 * np.array([shape.GetDX(), shape.GetDY(), shape.GetDZ()]))
         if cls in _PRIM_CLASSES:
             o   = shape.GetOrigin()
             ext = 2 * np.array([shape.GetDX(), shape.GetDY(), shape.GetDZ()])

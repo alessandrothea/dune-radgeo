@@ -17,6 +17,8 @@ from collections import defaultdict
 
 import numpy as np
 
+from ._draw import box_corners_world
+
 
 def _rot_matrix_rad(rx: float, ry: float, rz: float) -> np.ndarray:
     """3×3 rotation matrix from GDML Euler angles [rad]: R = Rz @ Ry @ Rx.
@@ -42,6 +44,14 @@ def _arc_points(r: float, phi0: float, dphi: float) -> np.ndarray:
         phis = np.concatenate([[phi0, phi0 + dphi], quads])
     return r * np.column_stack([np.cos(phis), np.sin(phis)])
 
+def _placed_aabb(bbox: tuple, pos: np.ndarray, rot: np.ndarray) -> tuple:
+    """(lo, hi) of box `bbox` = (centre, ext) mapped by x -> rot @ x + pos:
+    the envelope of its 8 corners."""
+    centre, ext = bbox
+    corners = box_corners_world(pos + rot @ centre, ext, rot)
+    return corners.min(axis=0), corners.max(axis=0)
+
+
 class GeometryBase:
     """
     Backend-independent queries on a parsed geometry.
@@ -64,6 +74,10 @@ class GeometryBase:
         box solid → full extents ``(dx, dy, dz)``.
     ``_solid_first``
         boolean solid → its first operand.
+    ``_shape_bbox``
+        solid → ``(centre, ext)``, its local bounding box as the reader
+        computed it (the ROOT backend: ROOT's own, for every shape).  Solids
+        not listed get theirs from :meth:`solid_bbox`.
     ``_world``
         name of the world volume.
     """
@@ -77,6 +91,7 @@ class GeometryBase:
         self._vols:  dict[str, dict]       = {}
         self._world: str | None            = None
         self._solid_first: dict[str, str]  = {}
+        self._shape_bbox: dict[str, tuple] = {}
 
     # -- tree search -------------------------------------------------------
 
@@ -203,6 +218,50 @@ class GeometryBase:
         if vol is None or not vol.get("solid"):
             return []
         return self.solid_parts(vol["solid"])
+
+    def solid_bbox(self, solid: str, _seen: frozenset = frozenset()) -> tuple | None:
+        """
+        ``(centre, ext)``: the local axis-aligned bounding box of `solid`,
+        the box ROOT gives the shape (TGeoBBox origin and DX/DY/DZ), which
+        BaseRadioGen samples a volume_gen node in.  A primitive's own box; a
+        boolean's as TGeoUnion / TGeoSubtraction / TGeoIntersection::
+        ComputeBBox build it from the operands' boxes, each placed by its 8
+        corners: the envelope of both operands (union), of the first one
+        (subtraction), or the overlap of both (intersection).  None when a
+        solid involved is not supported (cycle-safe).
+        """
+        bb = self._shape_bbox.get(solid)
+        if bb is None:
+            bb = self._prims.get(solid)
+        if bb is not None:
+            return bb
+        node = self._bools.get(solid)
+        if node is None or solid in _seen:
+            return None
+        op, first, second, pos, rot, fpos, frot = node
+        seen = _seen | {solid}
+        a = self.solid_bbox(first, seen)
+        b = None if op == "subtraction" else self.solid_bbox(second, seen)
+        if a is None or (b is None and op != "subtraction"):
+            return None
+        lo, hi = _placed_aabb(a, fpos, frot)
+        if op == "union":
+            blo, bhi = _placed_aabb(b, pos, rot)
+            lo, hi = np.minimum(lo, blo), np.maximum(hi, bhi)
+        elif op == "intersection":
+            blo, bhi = _placed_aabb(b, pos, rot)
+            lo, hi = np.maximum(lo, blo), np.minimum(hi, bhi)
+            hi = np.maximum(hi, lo)              # disjoint operands: empty box
+        elif op != "subtraction":
+            return None
+        return (lo + hi) / 2, hi - lo
+
+    def volume_bbox(self, vol_name: str) -> tuple | None:
+        """:meth:`solid_bbox` of the solid of logical volume `vol_name`."""
+        vol = self._vols.get(vol_name)
+        if vol is None or not vol.get("solid"):
+            return None
+        return self.solid_bbox(vol["solid"])
 
     def box_extents(self, vol_name: str) -> np.ndarray | None:
         """Full (dx,dy,dz) extents [cm] for vol_name; None if not a box.

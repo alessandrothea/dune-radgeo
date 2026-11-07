@@ -32,7 +32,9 @@ backends can be compared with scripts/compare_ir.py.
 
 Non-box solids are approximated by boxes: tubes and tori by their bounding
 box, unions by one box per operand (e.g. each straight tube and corner of a
-field-shaper ring), subtractions by their outer (first) operand.
+field-shaper ring), subtractions by their outer (first) operand.  A radio
+volume_rand / volume_gen box is the bounding box of the volume's solid (a
+union: the whole composite) in the world, as BaseRadioGen samples it.
 
 Output is a JSON file readable by bki-plot and the nb_B notebook.
 """
@@ -48,14 +50,26 @@ from pathlib import Path
 import numpy as np
 
 from ._draw import box_corners_world
-from ._fcl import (DEFAULT_CONTAINMENT, FhiclParser, default_fcl_cache_dir,
-                   expand_fcl, producer_volumes, select_producers)
+from ._fcl import (DEFAULT_CONTAINMENT, DISTRIB_AXES, DISTRIB_COMMON,
+                   FhiclParser, default_fcl_cache_dir, distrib_keys, expand_fcl,
+                   producer_volumes, select_producers)
 from ._gdml import BACKENDS, GeometryBase, load_geometry
-from ._tf1 import GENERATOR_NPX, ROOTUnavailable
+from ._root import ROOTUnavailable
+from ._tf1 import GENERATOR_NPX
 from ._profiles import detect_profile, get_profile, profile_detector
 from ._search import gdml_from_fcl, resolve_search_path
 from .ir import IRCollection, VolumeEntry
 
+
+class ExtractError(Exception):
+    """An extraction step cannot go on; bki-extract exits with its message."""
+
+
+# radio row keys copied into the IR meta (when set)
+_RADIO_META = (("source", "node", "nuclide", "module_type", "BqPercc",
+                "rate", "surface", "T0", "T1")
+               + tuple(k for axis in DISTRIB_AXES for k in distrib_keys(axis).values())
+               + DISTRIB_COMMON)
 
 # ---------------------------------------------------------------------------
 # GDML → VolumeEntry list
@@ -70,13 +84,15 @@ def _gdml_volumes(gdml_path: Path,
                   passive: bool = False,
                   verbose: bool = False,
                   backend: str = "python") -> tuple[list[VolumeEntry], str, GeometryBase]:
-    """Parse a GDML and return (entries, detector_key, geo)."""
+    """Parse a GDML and return (entries, detector_key, geo).
+
+    Raises ExtractError when the backend cannot read it."""
     print(f"[info] parsing {gdml_path.name} ({backend} backend) …", file=sys.stderr)
     t0  = time.time()
     try:
         geo = load_geometry(str(gdml_path), backend=backend, verbose=verbose)
     except RuntimeError as exc:
-        sys.exit(f"[error] {exc}")
+        raise ExtractError(str(exc)) from exc
     print(f"[info] {len(geo.volume_names)} logical volumes  ({time.time()-t0:.1f}s)",
           file=sys.stderr)
 
@@ -150,11 +166,12 @@ def _gdml_volumes(gdml_path: Path,
 def _to_frame(entries: list[VolumeEntry], geo: GeometryBase, volume: str) -> dict:
     """Re-express `entries` (world frame) in the frame of `volume`, in place.
 
-    `volume` must be placed exactly once.  Returns the IR frame record."""
+    `volume` must be placed exactly once (else ExtractError).  Returns the IR
+    frame record."""
     hits = geo.find_positions([f"^{re.escape(volume)}$"], with_path=True)
     if len(hits) != 1:
-        sys.exit(f"[error] --frame {volume}: expected exactly one placement, "
-                 f"found {len(hits)}")
+        raise ExtractError(f"--frame {volume}: expected exactly one placement, "
+                           f"found {len(hits)}")
     _, t, R, path, *_ = hits[0]
     for e in entries:
         e.pos = R.T @ (e.pos - t)
@@ -192,7 +209,9 @@ def _fcl_radio_volumes(doc: dict,
     """Build radio VolumeEntry rows from an already-parsed FCL document.
 
     Returns (entries, producers): the rows, and the full FHiCL table of every
-    selected producer keyed by label (kept even when no row resolves)."""
+    selected producer keyed by label (kept even when no row resolves).
+    Raises ExtractError when a producer's distrib_* formula needs PyROOT and
+    it is missing; other producer errors are warnings."""
     table, labels = select_producers(doc, top_order,
                                      prefix=prefix,
                                      all_configured=all_configured,
@@ -204,7 +223,7 @@ def _fcl_radio_volumes(doc: dict,
             rows = producer_volumes(name, table[name],
                                     geo=geo, containment=containment, npx=npx)
         except ROOTUnavailable as exc:
-            sys.exit(f"[error] {name}: {exc}")
+            raise ExtractError(f"{name}: {exc}") from exc
         except Exception as exc:
             print(f"[warn] {name}: {exc}", file=sys.stderr)
             continue
@@ -219,14 +238,7 @@ def _fcl_radio_volumes(doc: dict,
             pos = (lo_a + hi_a) / 2
             ext = hi_a - lo_a
             rot = np.eye(3)
-            meta = {k: r.get(k) for k in
-                    ("source", "node", "nuclide", "module_type", "BqPercc",
-                     "rate", "surface", "T0", "T1",
-                     "distrib_x", "distrib_x_range", "distrib_x_eff_range", "distrib_x_formula_eff_range",
-                     "distrib_y", "distrib_y_range", "distrib_y_eff_range", "distrib_y_formula_eff_range",
-                     "distrib_z", "distrib_z_range", "distrib_z_eff_range", "distrib_z_formula_eff_range",
-                     "distrib_eff_containment", "distrib_eff_npx")
-                    if r.get(k) is not None}
+            meta = {k: r.get(k) for k in _RADIO_META if r.get(k) is not None}
             meta["index"] = r["index"]
             entries.append(VolumeEntry(kind="radio", name=name,
                                        pos=pos, ext=ext, rot=rot, meta=meta))
@@ -250,6 +262,13 @@ def _json_safe(v):
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    try:
+        _main()
+    except ExtractError as exc:
+        sys.exit(f"[error] {exc}")
+
+
+def _main() -> None:
     ap = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -310,7 +329,7 @@ def main() -> None:
         search_var = "FHICL_FILE_PATH" if is_fcl else "FW_SEARCH_PATH"
         resolved = resolve_search_path(args.input, var=search_var)
         if resolved is None:
-            sys.exit(f"[error] '{args.input}' not found on disk or in ${search_var}")
+            raise ExtractError(f"'{args.input}' not found on disk or in ${search_var}")
         inp = resolved
         is_fcl = inp.suffix.lower() == ".fcl"  # re-check after resolution
 
@@ -333,7 +352,7 @@ def main() -> None:
             if not gdml_path.is_file():
                 gdml_path = resolve_search_path(args.gdml)
                 if gdml_path is None:
-                    sys.exit(f"[error] --gdml '{args.gdml}' not found")
+                    raise ExtractError(f"--gdml '{args.gdml}' not found")
         elif is_fcl:
             name = gdml_from_fcl(fcl_doc)
             if name:
@@ -382,12 +401,12 @@ def main() -> None:
         entries += radio
 
     if not entries:
-        sys.exit("[error] nothing extracted — check patterns or use --verbose")
+        raise ExtractError("nothing extracted — check patterns or use --verbose")
 
     frame = None
     if args.frame and args.frame != "world":
         if geo is None:
-            sys.exit("[error] --frame needs the GDML (drop --no-geometry)")
+            raise ExtractError("--frame needs the GDML (drop --no-geometry)")
         frame = _to_frame(entries, geo, args.frame)
 
     ir = IRCollection(source=source, detector=detector_key, volumes=entries,
