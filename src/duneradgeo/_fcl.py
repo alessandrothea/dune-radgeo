@@ -313,46 +313,44 @@ class FhiclParser:
 # GDML-backed geometry resolution for volume_rand / volume_gen
 # ---------------------------------------------------------------------------
 
-def _world_aabb(geo, patterns: list[str]) -> tuple | None:
+def _world_aabb_per_hit(geo, patterns: list[str], label: str = "") -> list[tuple]:
     """
-    Axis-aligned bounding box (lo, hi) in world coordinates for all placements
-    of volumes matching `patterns`.  Returns None if nothing is found.
-    """
-    from ._draw import box_corners_world
-
-    hits = geo.find_positions(patterns)
-    if not hits:
-        return None
-    lo = np.full(3,  np.inf)
-    hi = np.full(3, -np.inf)
-    found = 0
-    for vname, pos, rot in hits:
-        ext = geo.box_extents(vname)
-        if ext is None:
-            continue
-        corners = box_corners_world(pos, ext, rot)
-        lo = np.minimum(lo, corners.min(axis=0))
-        hi = np.maximum(hi, corners.max(axis=0))
-        found += 1
-    return (lo.tolist(), hi.tolist()) if found else None
-
-
-def _world_aabb_per_hit(geo, patterns: list[str]) -> list[tuple]:
-    """
-    One (vol_name, lo, hi) per individual placement — used for volume_gen
-    when the caller wants one row per placed volume.
+    One (vol_name, lo, hi) per placement of the volumes matching `patterns`:
+    the world-frame axis-aligned envelope of the 8 corners of the volume's
+    bounding box (:meth:`GeometryBase.volume_bbox`), as BaseRadioGen builds
+    the box it samples a node in.  Volumes whose solid has no bounding box
+    are skipped with a warning naming `label`.
     """
     from ._draw import box_corners_world
 
     out = []
+    unsupported: dict[str, int] = {}
     for vname, pos, rot in geo.find_positions(patterns):
-        ext = geo.box_extents(vname)
-        if ext is None:
+        bbox = geo.volume_bbox(vname)
+        if bbox is None:
+            unsupported[vname] = unsupported.get(vname, 0) + 1
             continue
-        corners = box_corners_world(pos, ext, rot)
+        centre, ext = bbox
+        corners = box_corners_world(pos + rot @ centre, ext, rot)
         out.append((vname, corners.min(axis=0).tolist(),
                     corners.max(axis=0).tolist()))
+    for vname, n in unsupported.items():
+        print(f"[warn] {label}: no bounding box for the solid of {vname} "
+              f"(unsupported shape), {n} placement(s) skipped", file=sys.stderr)
     return out
+
+
+def _world_aabb(geo, patterns: list[str], label: str = "") -> tuple | None:
+    """
+    World-frame axis-aligned box (lo, hi) enclosing every placement of the
+    volumes matching `patterns` (the union of :func:`_world_aabb_per_hit`).
+    Returns None if nothing is found.
+    """
+    hits = _world_aabb_per_hit(geo, patterns, label)
+    if not hits:
+        return None
+    return (np.min([h[1] for h in hits], axis=0).tolist(),
+            np.max([h[2] for h in hits], axis=0).tolist())
 
 
 # ---------------------------------------------------------------------------
@@ -470,7 +468,7 @@ def producer_volumes(name: str, cfg: dict, geo=None,
         vr = cfg["volume_rand"]
         lo = hi = None
         if geo is not None:
-            bbox = _world_aabb(geo, [f"^{re.escape(vr)}$"])
+            bbox = _world_aabb(geo, [f"^{re.escape(vr)}$"], name)
             if bbox is not None:
                 lo, hi = bbox
             else:
@@ -480,7 +478,7 @@ def producer_volumes(name: str, cfg: dict, geo=None,
     else:
         vg = cfg.get("volume_gen", ".*")
         if geo is not None:
-            hits = _world_aabb_per_hit(geo, [vg])
+            hits = _world_aabb_per_hit(geo, [vg], name)
             if hits:
                 for i, (vname, lo, hi) in enumerate(hits):
                     rows.append(dict(base, index=i,

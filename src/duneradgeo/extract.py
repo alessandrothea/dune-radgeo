@@ -32,7 +32,9 @@ backends can be compared with scripts/compare_ir.py.
 
 Non-box solids are approximated by boxes: tubes and tori by their bounding
 box, unions by one box per operand (e.g. each straight tube and corner of a
-field-shaper ring), subtractions by their outer (first) operand.
+field-shaper ring), subtractions by their outer (first) operand.  A radio
+volume_rand / volume_gen box is the bounding box of the volume's solid (a
+union: the whole composite) in the world, as BaseRadioGen samples it.
 
 Output is a JSON file readable by bki-plot and the nb_B notebook.
 """

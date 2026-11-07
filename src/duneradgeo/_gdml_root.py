@@ -115,6 +115,13 @@ class RootGDMLGeometry(GeometryBase):
     def _add_shape(self, shape) -> None:
         name = shape.GetName()
         cls  = shape.ClassName()
+        if hasattr(shape, "GetDX"):
+            # ROOT's own bounding box, for every shape class (composites
+            # included): the box BaseRadioGen samples volume_gen nodes in
+            o = shape.GetOrigin()
+            self._shape_bbox[name] = (
+                np.array([o[0], o[1], o[2]], dtype=float),
+                2 * np.array([shape.GetDX(), shape.GetDY(), shape.GetDZ()]))
         if cls in _PRIM_CLASSES:
             o   = shape.GetOrigin()
             ext = 2 * np.array([shape.GetDX(), shape.GetDY(), shape.GetDZ()])
