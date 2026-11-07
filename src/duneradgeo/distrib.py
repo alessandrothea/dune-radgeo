@@ -279,6 +279,9 @@ _MAX_PRODUCERS = 16
 _TOP    = 0.875          # top of the plot and of the side panel (figure units)
 _AX_W   = 0.565          # plot width
 _PANEL  = 0.665          # side panel left edge
+_BOX_X, _BOX_Y = 0.065, 0.04   # formula box: text left edge, box bottom
+_BOX_PAD, _BOX_GAP = 0.012, 0.012
+_CAP_SIZE    = 8.5
 _ZOOM_FRAC   = 0.5       # zoom when the eff range is narrower than this × range
 _ZOOM_MARGIN = 0.25      # zoom window: eff range ± this × its width
 
@@ -328,11 +331,16 @@ def zoom_window(g: DistribGroup) -> tuple | None:
 def _draw_page(fig, g: DistribGroup, log: bool, source: str,
                page: int, npages: int, zoom: bool = True) -> None:
     """One distribution on `fig`: title, plot (+ zoom), formula box, side panel."""
-    # the formula exactly as in the FHiCL, then the compacted version
-    flines = raw_formula_lines(g.formula, g.axis) + [""] + formula_lines(g.formula)
-    fsize = min(10.0, _mono_size(flines, fig, 0.065, 10.0, right=0.065 + _AX_W))
-    line_h = fsize * 1.45 / 72 / fig.get_figheight()          # one mono line, fig units
-    box_top = 0.045 + len(flines) * line_h + 0.025
+    # formula box: the FHiCL parameter, then the compacted version, each captioned
+    raw, comp = raw_formula_lines(g.formula, g.axis), formula_lines(g.formula)
+    fsize = min(10.0, _mono_size(raw + comp, fig, _BOX_X, 10.0, right=_BOX_X + _AX_W))
+    H = fig.get_figheight()
+    mono_h = fsize * 1.45 / 72 / H                            # one mono line, fig units
+    cap_h = _CAP_SIZE * 1.6 / 72 / H                          # caption line + gap
+    blocks = [("FHiCL · evaluated by ROOT", raw), ("compact form · display only", comp)]
+    box_h = (2 * _BOX_PAD + len(blocks) * cap_h + (len(raw) + len(comp)) * mono_h
+             + (len(blocks) - 1) * _BOX_GAP)
+    box_top = _BOX_Y + box_h
     ax_bottom = box_top + 0.085
 
     # ---- title ----
@@ -369,10 +377,25 @@ def _draw_page(fig, g: DistribGroup, log: bool, source: str,
         ax_z.set_title(f"zoom: effective ranges ± {100 * _ZOOM_MARGIN:g}% of their span",
                        fontsize=10, loc="left", color=_GREY)
 
-    # ---- formula (monospace) ----
-    fig.text(0.065, box_top - 0.012, "\n".join(flines), family=_MONO, fontsize=fsize,
-             va="top", ha="left", linespacing=1.45,
-             bbox=dict(boxstyle="round,pad=0.5", fc="0.96", ec="0.82"))
+    # ---- formula box: captions (sans, grey) over monospace blocks ----
+    from matplotlib.patches import FancyBboxPatch
+    chars = max(len(s) for s in raw + comp)
+    width = max(chars * 0.61 * fsize, max(len(c) for c, _ in blocks) * 0.5 * _CAP_SIZE)
+    width = min(width / 72 / fig.get_figwidth(), _AX_W) + 0.012
+    fig.add_artist(FancyBboxPatch(
+        (_BOX_X - 0.006, _BOX_Y), width, box_h, transform=fig.transFigure,
+        boxstyle="round,pad=0,rounding_size=0.006", fc="0.965", ec="0.8", lw=0.8,
+        zorder=0))
+    y = box_top - _BOX_PAD
+    for k, (caption, lines) in enumerate(blocks):
+        if k:
+            y -= _BOX_GAP
+        fig.text(_BOX_X, y, caption, fontsize=_CAP_SIZE, color=_GREY, style="italic",
+                 va="top", ha="left")
+        y -= cap_h
+        fig.text(_BOX_X, y, "\n".join(lines), family=_MONO, fontsize=fsize,
+                 va="top", ha="left", linespacing=1.45)
+        y -= len(lines) * mono_h
 
     # ---- side panel ----
     def rng_txt(r):

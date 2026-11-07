@@ -434,10 +434,11 @@ bki-distrib radbkg.json --list --radio 'UpperMesh'
 #     ...
 ```
 
-Each page has the formula in monospace, twice: exactly as in the FHiCL
-(`distrib_x: "…"`, wrapped between top-level terms, nothing added or
-dropped), then compacted for reading (one term per line, `TMath::` dropped,
-`Abs(a)` as `|a|`, `Power(a,n)` as `a^n`, `*` as `·`). A side panel has the full and
+Each page has a formula box with two captioned monospace blocks: the FHiCL
+parameter exactly as ROOT evaluates it (`distrib_x: "…"`, wrapped between
+top-level terms, nothing added or dropped), and the same formula compacted
+for reading only (`f(x) = …`, one term per line, `TMath::` dropped, `Abs(a)`
+as `|a|`, `Power(a,n)` as `a^n`, `*` as `·`). A side panel has the full and
 both effective ranges, the containment (stored, and measured for each
 distribution), `Npx`, the generator volume (`meta.source`) and the producers
 with their nuclides.
