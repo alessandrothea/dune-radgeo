@@ -26,16 +26,18 @@ uv sync --no-group root  # everything but ROOT
 pip install .            # everything but ROOT
 ```
 
-ROOT is needed to evaluate `distrib_x/y/z` formulas (`bki-extract` on a FCL
-with such producers, `bki-distrib`) and for `bki-extract --gdml-backend
-root`.  It is a uv dependency group installed by default, not a package
-dependency, so `pip` never installs it: in a dunesw area the stack's ROOT is used and is not
-shadowed by the pip wheel.  The `root` pip wheels exist for CPython 3.14
-only (the group is skipped on older Pythons), and the current ones
-(0.1a12) are built without TGeo/GDML, so for now `--gdml-backend root`
-works only with a full ROOT such as the dunesw one (TF1, used for the
-formulas, is in every build).  The pip wheel prints an "alpha stage" warning
-on import; duneradgeo silences it.
+PyROOT is needed to evaluate `distrib_x/y/z` formulas (`bki-extract` on a FCL
+with such producers, `bki-distrib`, `tests/test_tf1.py`) and for
+`bki-extract --gdml-backend root`.  On the host it comes from the `root` pip
+wheel, a uv dependency group installed by default, not a package
+dependency: `pip` never installs it, so a dunesw area uses the stack's ROOT,
+never shadowed by the wheel.  The group's marker limits it to Python ≥ 3.14
+(the host venv).  The current wheels (0.1a12) are built without TGeo/GDML,
+so for now `--gdml-backend root` works only with a full ROOT such as the
+dunesw one (TF1, used for the formulas, is in every build).  The wheel
+prints an "alpha stage" warning on import; duneradgeo silences it.  Without
+PyROOT, the features that need it raise `ROOTUnavailable` (see
+[Python API](#python-api)).
 
 `bki-extract` itself needs only NumPy, plus PyROOT for producers with
 `distrib_x/y/z`.  For an extraction-only install, e.g. on top of a LArSoft
@@ -51,7 +53,7 @@ pip install --no-deps .          # add numpy if the environment lacks it
 | `matplotlib` | `bki-plot` and `bki-distrib` PDF/PNG output, `plot_ir` |
 | `plotly` | `make_figure` |
 | `jupyter`, `nbconvert` | `nb_B.ipynb`, `scripts/run_notebook.py` |
-| `root` (group) | `distrib_*` formulas: `bki-extract` of producers with `distrib_*`, `bki-distrib`, `tests/test_tf1.py`; `bki-extract --gdml-backend root`, `scripts/compare_backends.py` (need TGeo/GDML) |
+| `root` (group) | `distrib_*` formulas: `bki-extract` of producers with `distrib_*`, `bki-distrib`, `tests/test_tf1.py`.  `bki-extract --gdml-backend root` and `scripts/compare_backends.py` need a ROOT with TGeo/GDML (dunesw) |
 
 In a `--no-deps` install, rendering a plot without matplotlib stops with an
 `ImportError` that says what to install.
@@ -296,12 +298,15 @@ bki-measure geo.json
 bki-measure geo.json drift-gaps -d --json gaps.json   # per anode–cathode pair
 ```
 
-| Measurement  | What it measures |
-|--------------|------------------|
-| `anode-cryostat-gap` | Along x, from each anode to the cryostat face behind it: top anodes to the cryostat top face, bottom anodes to the bottom face (faces of the `volCryostat` box, i.e. the inner cryostat surface; the top one encloses the gas ullage).  `gap_inner` is measured from the anode face looking into the drift volume, `gap_outer` from the face looking at the cryostat.  Top / bottom is split at the cathode plane (cryostat mid-height without cathodes).  On top, the liquid surface (bottom of `volGaseousArgon`) is shown for reference.  Needs `anode` and `struct volCryostat`. |
-| `drift-gaps` | Pairs every anode with the cathode module it faces (largest y–z overlap) and measures along x: `gap` between the facing surfaces (anode bottom − cathode top on the top side, cathode bottom − anode top on the bottom side) and `centre_dist` between centres.  Anodes above the cathode are "top", below "bottom"; per side it reports mean/min/max, flags pairs more than 0.01 cm from the median, and shows the `volTPCActive` x-extent as a cross-check.  Needs `anode` and `cathode` entries in the IR. |
-| `opdet-fc-gap` | Wall optical detectors (opdet boxes whose centre is outside the field cage's y–z envelope; the cathode-mounted ones are inside and skipped) ↔ closest field-cage surface: for each detector, the nearest field-shaper part and the shortest box-to-box distance, summarised per wall (`y-`, `y+`, `z-`, `z+`) with the closest tube types.  Tubes are stored as bounding boxes, so the gap to a facing straight tube is exact and to a corner a lower bound.  Needs `opdet` and `fieldshaper` entries in the IR. |
-| `fc-cryostat-gap` | The four field-cage side walls (y−, y+, z−, z+; top and bottom are open) ↔ cryostat walls (faces of `volCryostat`).  Each field-shaper piece is assigned to the wall it is nearest; per wall, `gap_min` is the distance from the cryostat wall to the closest piece (the standard tubes) and `gap_max` to the most recessed one (e.g. the slim tubes of the photon-detector window).  `--detail` lists the gaps per wall and piece type.  Needs `fieldshaper` and `struct volCryostat`. |
+| Measurement  | What it measures | Needs |
+|--------------|------------------|-------|
+| `anode-cryostat-gap` | along x, each anode ↔ the `volCryostat` face behind it (top / bottom, split at the cathode plane); `gap_inner` / `gap_outer` from the anode's drift-side / cryostat-side face | `anode`, `struct volCryostat` |
+| `drift-gaps` | along x, each anode ↔ the cathode module it faces: `gap` between facing surfaces, `centre_dist`; per side, with outliers flagged | `anode`, `cathode` |
+| `opdet-fc-gap` | each wall optical detector ↔ the closest field-shaper part (box-to-box distance), per wall | `opdet`, `fieldshaper` |
+| `fc-cryostat-gap` | the four field-cage side walls ↔ the `volCryostat` walls: `gap_min` (closest piece), `gap_max` (most recessed piece) | `fieldshaper`, `struct volCryostat` |
+
+The full definitions are the docstrings of the measurement functions in
+`src/duneradgeo/measurements/`.
 
 ### Adding a measurement
 
@@ -340,7 +345,7 @@ def cathode_thickness(ir: IRCollection) -> Result:
                  columns=["cathode", "dx"])
     cathodes = ir.by_kind("cathode")
     for tag, v in zip(tags(cathodes), cathodes):
-        lo, hi = aabb(v)                        # world-frame box corners
+        lo, hi = aabb(v)                        # IR-frame box corners
         res.rows.append(dict(cathode=tag, dx=float(hi[X] - lo[X])))
     dx = [r["dx"] for r in res.rows]
     res.values["dx"] = max(dx) if dx else None  # headline numbers (→ JSON)
@@ -350,10 +355,11 @@ def cathode_thickness(ir: IRCollection) -> Result:
 
 `Result` fields: `summary` (printed lines), `values` (headline numbers,
 `None` when not applicable), `columns` + `rows` (the `--detail` table).
-Helpers: `aabb(v)` world-frame box corners, `tags(vols)` stable `name#k`
-labels, `overlap_area(...)` projected overlap of two boxes,
-`box_distances(...)` shortest distance from one box to many,
-`struct_box(ir, pattern)` bounding box of matching struct volumes (e.g. the cryostat).  From Python,
+Helpers: `aabb(v)` the IR-frame (lo, hi) corners of a volume's box (via
+`duneradgeo._draw.aabb`), `tags(vols)` stable `name#k` labels,
+`overlap_area(...)` projected overlap of two boxes, `box_distances(...)`
+shortest distance from one box to many, `struct_box(ir, pattern)` bounding
+box of matching struct volumes (e.g. the cryostat).  From Python,
 `duneradgeo.measurements.run(ir, ["drift-gaps"])` returns the `Result` list.
 
 ---
@@ -364,8 +370,10 @@ Draws the position profiles of the radiological producers that set
 `distrib_x`, `distrib_y` or `distrib_z`. In larsimrad's `BaseRadioGen`, each
 of these is a 1D TF1 formula in the variable `x`. The generator samples it
 with `TF1::GetRandom` over the box range on that axis: `X0..X1` etc., the
-`volume_rand` bounding box, or each `volume_gen` node's box. Axes without a
-formula are sampled uniformly.
+`volume_rand` bounding box, or each `volume_gen` node's box (see
+[radio boxes](#radio-boxes)). Axes without a formula are sampled uniformly.
+
+### The formula and the generated distribution (Npx)
 
 The formulas are ROOT TFormula expressions, so they are evaluated by ROOT
 (`duneradgeo._tf1`), never translated. Two distributions are described:
@@ -391,6 +399,14 @@ are not affected.
 generated distribution (`distrib_<axis>_eff_range`, the effective range, which
 becomes the box on that axis) and the same for the formula
 (`distrib_<axis>_formula_eff_range`), plus `distrib_eff_containment` and `distrib_eff_npx`.
+
+Not modelled: the generator also redraws points that fall outside the
+volumes allowed by `volume_gen` / `material`. With `material: LAr` in the
+`volCryostat` box, nothing is generated in the gas above the liquid (x >
+325.09 cm in the 1x8x14 VD geometry), and the profile is renormalised over
+the liquid.
+
+### Pages and options
 
 `bki-distrib` draws, over the full range, the formula (black) and the
 generated distribution (blue), shades the generated effective range and
@@ -443,13 +459,7 @@ both effective ranges, the containment (stored, and measured for each
 distribution), `Npx`, the generator volume (`meta.source`) and the producers
 with their nuclides.
 
-Not modelled: the generator also redraws points that fall outside the
-volumes allowed by `volume_gen` / `material`. With `material: LAr` in the
-`volCryostat` box, nothing is generated in the gas above the liquid (x >
-325.09 cm in the 1x8x14 VD geometry), and the profile is renormalised over
-the liquid.
-
-IR files must carry the keys above: re-run `bki-extract` for older ones.
+IR files must carry the `distrib_*` keys above: re-run `bki-extract` for older ones.
 
 ---
 
@@ -512,9 +522,10 @@ Both fill the same tables (volumes and placements, box/tube/torus bounding
 boxes, boolean operands) and share the search, so placement paths, physvol
 names, frames and box decomposition are identical; only the parsing
 differs.  ROOT evaluates GDML expressions and units itself and computes
-each solid's bounding box.  Solids other than box, tube, torus and their
-booleans are skipped by both.  Reading with ROOT takes a few seconds
-instead of a fraction of one.
+each solid's bounding box; the built-in parser builds the same boxes,
+booleans included, as ROOT does (see [radio boxes](#radio-boxes)).  Solids
+other than box, tube, torus and their booleans are skipped by both.
+Reading with ROOT takes a few seconds instead of a fraction of one.
 
 `scripts/compare_backends.py` loads one or more GDMLs with both backends
 and compares volumes, solid tables and every profile placement (paired by
@@ -529,9 +540,9 @@ dsw -C <area> exec bki-extract geometry.gdml -o /abs/rt.json --gdml-backend root
 dsw -C <area> exec python /path/to/dune-radgeo/scripts/compare_ir.py /abs/py.json /abs/rt.json
 ```
 
-The two backends agree exactly on the VD refactored (2x8x40, 1x8x14 v5
-and v7a), VD ggd (with and without wires) and HD refactored (1x2x6)
-geometries.
+The two backends agree exactly on the VD perl GDMLs (refactored 2x8x40,
+1x8x14 v5 and v7a), the VD ggd one (with and without wires) and the HD
+refactored 1x2x6 one.
 
 ### Inspecting an IR
 
@@ -539,7 +550,7 @@ geometries.
 # kinds, names and placement counts; radio producers list each surface
 bki-plot radio.json --list
 
-# per-placement world-frame ranges, restricted to structural volumes
+# per-placement IR-frame ranges, restricted to structural volumes
 bki-plot radio.json -L --kind struct
 
 # where exactly are the cathode generation surfaces?
@@ -649,8 +660,6 @@ the form `PRODUCER_RE#SEL`:
 - With `--surface`, every selected surface gets its own colour and legend
   entry (`producer#index`); with more than 20 surfaces the colouring falls
   back to one colour per producer.
-- `meta.node` (the matched geometry node of a `volume_gen` producer) is only
-  present in IR files written by a recent `bki-extract`.
 
 ### Picking individual placements
 
@@ -688,9 +697,10 @@ bki-plot geo.json --kind opdet --pick 'volArapuca#@volCryostat:0/volArapuca:'
 
 `--pick` takes `NAME_RE#@REGEX` specs, like `--surface`, but for every kind:
 
-- `REGEX` is matched (re.search) against `meta.path` and `meta.part` (the
-  primitive solid of a multi-part volume); on radio entries `--pick` works
-  exactly like `--surface`, including index lists.
+- `REGEX` is matched (re.search) against `meta.path`, `meta.part` (the
+  primitive solid of a multi-part volume) and, for GDMLs that name their
+  physvols (ggd), `meta.pv` and `meta.pvpath`; on radio entries `--pick`
+  works exactly like `--surface`, including index lists.
 - Index lists (`#0,2`) are for radio entries only; on a geometry volume they
   are an error.
 - `NAME_RE` is a `re.search` too: `volTPC` also matches `volTPCActive`, and
@@ -698,8 +708,6 @@ bki-plot geo.json --kind opdet --pick 'volArapuca#@volCryostat:0/volArapuca:'
   (`^volTPC$`) to target one volume.
 - Volumes not matched by any `NAME_RE` are untouched; several specs for the
   same volume are OR-ed.
-- `REGEX` also matches `meta.pv` and `meta.pvpath`, the physvol names, for
-  GDMLs that name their physvols (ggd).
 - IR files written before `meta.path` existed cannot be picked from; re-run
   `bki-extract`.
 
@@ -719,7 +727,7 @@ bki-plot planes.json --orientation vd \
     --highlight 'bottom planes=^volTPCPlane#@volTPC_PV_Bot' \
                 'top planes=^volTPCPlane#@volTPC_PV_Top' 'cathode=^volCathodeGrid$'
 
-# same check on a refactored GDML (unnamed physvols): bottom CRMs are the odd copies
+# same check on a perl GDML (unnamed physvols): bottom CRMs are the odd copies
 bki-plot planes_ref.json --orientation vd \
     --highlight 'bottom planes=^volTPCPlane#@volTPC:\d*[13579]/'
 
@@ -800,14 +808,15 @@ bki-plot planes.json -L --kind struct --highlight '^volTPCPlaneU$#@_PV_Bot'
 | `meta` | kind-specific metadata: GDML placement `path` for geometry volumes (see [Picking individual placements](#picking-individual-placements)) and, when the GDML names its physvols (ggd), the physvol name `pv` and the physvol names along the path `pvpath` (`placeDetEnclosure/…/volTPC_PV_Bot0/volTPCPlaneU_PV`); nuclide, BqPercc, surface, index, … for radio |
 
 For radio entries, `meta` also holds, for each axis with a `distrib_<axis>`
-formula: the formula, `distrib_<axis>_range` (the full box range it is sampled over,
-the source of truth), `distrib_<axis>_eff_range` (the effective range: the shortest
-interval holding `distrib_eff_containment` of the distribution `TF1::GetRandom`
-generates with `distrib_eff_npx` table points, which becomes the box extent on that
-axis) and `distrib_<axis>_formula_eff_range` (the same for the formula pdf). The
+formula: the formula, `distrib_<axis>_range` (the full box range it is
+sampled over, the source of truth), `distrib_<axis>_eff_range` and
+`distrib_<axis>_formula_eff_range`, plus `distrib_eff_containment` and
+`distrib_eff_npx` (see [the formula and the generated
+distribution](#the-formula-and-the-generated-distribution-npx)). The
 effective ranges are derived by `bki-extract` with ROOT, not module
 parameters. These are world coordinates. The box (`pos`/`ext`) is the full
-box on the axes without a formula and the effective range on the others.
+box on the axes without a formula and the generated effective range on the
+others.
 
 `producers` is present for FCL input. It holds the complete FHiCL table of
 every selected radiological producer, keyed by module label, and is stored
@@ -832,14 +841,48 @@ separately; `-L` prints `name#copy` and the part.
 Axis convention: **x** = drift, **z** = beam; **y** is vertical in HD and
 horizontal in VD (where the drift, x, is vertical).
 
+### Radio boxes
+
+A radio entry's box is not decomposed: it is the box larsimrad's
+`BaseRadioGen` samples in, which it finds without looking at the shape
+type.
+
+- `X0..X1`, `Y0..Y1`, `Z0..Z1`: that box, as given.
+- `volume_rand`, `volume_gen`: for every shape, the ROOT bounding box of the
+  volume's solid (`TGeoBBox` origin and half-lengths), so a tube or torus
+  gets its bounding box and a union the box of the whole composite, not of
+  one operand (a subtraction: of its first operand; an intersection: the
+  overlap of the operands' boxes).  That box is placed in the world through
+  the mother chain, and the entry is the axis-aligned envelope of its 8
+  corners.  `volume_rand` gives one entry enclosing every placement of the
+  volume (`BaseRadioGen` takes the first placement it finds: one of the
+  known differences that `tests/test_fcl.py` marks as xfail); `volume_gen`
+  one entry per matching node (`meta.node`).
+- The ROOT backend takes ROOT's own box for every shape; the built-in
+  parser computes it for boxes, tubes, tori and their booleans, and warns
+  about a volume whose solid it cannot box.
+- Then each axis with a `distrib_<axis>` formula is narrowed to its
+  effective range.
+
+Like every entry, the box is written in the IR frame (that of the
+`--frame` volume, if given); the `distrib_*` ranges stay in world
+coordinates.
+
 ---
 
 ## Python API
+
+The public entry points are the package top level (`duneradgeo.IRCollection`,
+`GDMLGeometry`, `FhiclParser`, …), `duneradgeo.ir`, `plot.plot_ir`,
+`notebook_plot.make_figure`, `distrib` and `measurements`.  Modules with a
+leading underscore are internal: the examples use some of them, but their
+names and signatures may change.
 
 ```python
 from duneradgeo.ir import IRCollection
 from duneradgeo.notebook_plot import make_figure
 from duneradgeo.plot import plot_ir
+from duneradgeo._select import select_volumes      # internal
 
 ir = IRCollection.load("detector.json")
 
@@ -872,37 +915,81 @@ plot_ir(ir, "cathode.pdf", highlight=["cathode=^volCathodeGrid$"],
 make_figure(ir, highlight=["cathode=^volCathodeGrid$"]).show()
 
 # same selection as a volume list (e.g. for make_figure)
-from duneradgeo.ir import IRCollection
-from duneradgeo.plot import select_volumes
 sub = IRCollection(source=ir.source, detector=ir.detector,
                    volumes=select_volumes(ir, surfaces=["GenInCathode#@plane_x"]))
 make_figure(sub).show()
 ```
 
-Position profiles (`bki-distrib`):
+Position profiles (`bki-distrib`; needs PyROOT):
 
 ```python
-from duneradgeo.distrib import collect, profile, with_npx, plot_groups
-from duneradgeo.plot import select_volumes
+from duneradgeo.distrib import collect, fractions, plot_groups, profile, with_npx
 
-groups = collect(select_volumes(ir, kinds=["radio"]))   # one group per formula + range
-pr = profile(groups[0])          # pr.x, pr.formula, pr.generated (pdfs), pr.frac_gen
+groups = collect(select_volumes(ir, kinds=["radio"]))   # one DistribGroup per formula + range
+g = groups[0]           # g.axis, g.formula, g.range_, g.eff, g.formula_eff, g.npx, g.producers
+pr = profile(g)         # pr.x, pr.formula, pr.generated: both pdfs over g.range_
+fractions(g)            # (generated, formula): measured fractions inside g.eff, g.formula_eff
+g2 = with_npx(g, 10000) # a copy, g2.eff recomputed for a generator with SetNpx(10000)
 plot_groups(groups, "profiles.pdf", log=True)           # one page per group
-
-# the formulas directly, evaluated by ROOT
-from duneradgeo import _tf1
-f = groups[0].formula; lo, hi = groups[0].rng
-_tf1.evaluate(f, [-320.0, 0.0])                  # TF1::Eval
-_tf1.generated_interval(f, lo, hi, 0.99)         # 99% of what GetRandom generates (Npx=100)
-_tf1.quantiles(f, lo, hi, [0.16, 0.5, 0.84])     # TF1::GetQuantiles on the Npx table
-_tf1.sample(f, lo, hi, 100000)                   # TF1::GetRandom
 ```
+
+`g.dist` is the group's formula as a `Distribution` of the internal module
+`duneradgeo._tf1`: one formula on one range with one Npx, which owns its
+TF1 (see [the formula and the generated
+distribution](#the-formula-and-the-generated-distribution-npx)).
+`_tf1.distribution(formula, lo, hi, npx=100)` returns the same object for
+the same arguments (the 256 most recent are cached;
+`distribution.cache_clear()` drops them).
+
+```python
+from duneradgeo import _tf1                      # internal
+
+d = g.dist                       # = _tf1.distribution(g.formula, *g.range_, g.npx)
+d.eval([-320.0, 0.0])            # TF1::Eval
+d.formula_interval(0.99)         # shortest interval holding 99% of the formula
+d.interval(0.99)                 # ... of what GetRandom generates (Npx = d.npx)
+d.quantiles([0.16, 0.5, 0.84])   # TF1::GetQuantiles on the Npx table
+d.cdf([-320.0]), d.pdf(pr.x)     # the generated distribution
+d.sample(100000)                 # TF1::GetRandom, as the generator draws
+d.with_npx(10000).interval(0.99)
+_tf1.distribution("TMath::Gaus(x,100,1)", -425.12, 425.20).interval(0.99)
+```
+
+Errors:
+
+- `ROOTUnavailable` (`duneradgeo._root`, a `RuntimeError`): PyROOT cannot
+  be imported where it is needed (a `distrib_*` formula, the ROOT GDML
+  backend), or it has no TGeo/GDML (`--gdml-backend root` with the pip
+  wheel).
+- `ValueError`: ROOT cannot parse a formula, or the formula integrates to 0
+  over its range.
+- `ExtractError` (`duneradgeo.extract`): extraction cannot go on
+  (input or `--gdml` not found, GDML unreadable, a `--frame` volume not
+  placed exactly once, a `distrib_*` producer without PyROOT, nothing
+  extracted).  The extraction steps (the internal `_gdml_volumes`,
+  `_fcl_radio_volumes`, `_to_frame`) raise it instead of exiting, so they
+  can be called from Python; `bki-extract` prints it as `[error] …` and
+  exits with status 1.
+
+Internal modules shared by the commands:
+
+| Module | Contents |
+|--------|----------|
+| `duneradgeo._select` | the selectors of `bki-plot`, `bki-distrib` and `make_figure`: `select_volumes`, `parse_pick_spec`, `parse_highlight_spec`, `validate_picks`, `highlight_groups` |
+| `duneradgeo._style` | colours and palettes (`KIND_COLOUR`, `STRUCT_PALETTE`, `SURFACE_PALETTE`, `CONTEXT_COL`, …) and `import_mpl()`, the matplotlib import with an install hint |
+| `duneradgeo._draw` | `aabb(pos, ext, rot)`: the (lo, hi) envelope of a rotated box's 8 corners; `box_corners_world` |
+| `duneradgeo._tf1` | `Distribution`, `distribution()`, `GENERATOR_NPX` (100) |
+| `duneradgeo._root` | `import_root(feature)`, the shared PyROOT import (batch mode, wheel warning silenced); `ROOTUnavailable` |
 
 Parsing utilities:
 
 ```python
-from duneradgeo import GDMLGeometry, FhiclParser
-from duneradgeo._fcl import expand_fcl
+from duneradgeo import FhiclParser, GDMLGeometry, load_geometry
+from duneradgeo._fcl import expand_fcl                     # internal
+
+geo = load_geometry("geometry.gdml")             # GDMLGeometry; backend="root" for ROOT's reader
+geo.find_positions([r"^volCryostat$"])           # [(name, world pos, world rot), …]
+doc = FhiclParser(expand_fcl("job.fcl")).parse() # the FHiCL document as nested dicts
 ```
 
 ---
@@ -945,3 +1032,34 @@ it is drawn as its outer box.  The cathode-mounted photon detectors
 | GDML geometry  | `$FW_SEARCH_PATH`     |
 
 Both mirror LArSoft's `cet::search_path` behaviour (first-match-wins).
+
+---
+
+## Tests
+
+| File | Checks | Needs |
+|------|--------|-------|
+| `tests/test_tf1.py` | `duneradgeo._tf1`: the generated distribution against a `lar` Decay0Gen reference, the formula, caching and TF1 ownership | PyROOT |
+| `tests/test_fcl.py` | the FHiCL parser, `#include` expansion and `producer_volumes` (on a small GDML of boxes) | nothing (ROOT-free) |
+| `tests/test_formula_lines.py` | the formula text layout of the `bki-distrib` pages | nothing (ROOT-free) |
+| `tests/test_select.py` | the `--pick` / `--surface` / `--highlight` specs and `select_volumes` | nothing (ROOT-free) |
+
+Each file runs on its own or under pytest (not a dependency).  On the host:
+
+```bash
+.venv/bin/python tests/test_fcl.py        # prints ok / xfail per test
+.venv/bin/python -m pytest tests/          # if pytest is installed
+```
+
+In a dunesw area (after `scripts/dunesw_installme.sh`), with the area's
+Python and ROOT:
+
+```bash
+dsw -C <area> py tests/test_tf1.py
+```
+
+Tests marked xfail check the correct behaviour where the code is known to
+differ (e.g. `volume_gen` matched with `re.search` where `BaseRadioGen`
+uses `std::regex_match`): each documents a known issue, with the reason in
+its `@xfail(...)`.  Run directly, they are skipped and listed as `xfail`;
+under pytest they run as expected failures.
