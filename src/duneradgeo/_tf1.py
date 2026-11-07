@@ -1,22 +1,49 @@
 """ROOT TF1 evaluation of the RadioGen/Decay0Gen distrib_x/y/z formulas.
 
-The formulas are ROOT TFormula expressions, so they are evaluated by ROOT
-itself, never translated.  The TF1 is built as larsimrad's BaseRadioGen does,
-``TF1(name, formula, lo, hi)``, and the generator draws positions with
-``GetRandom(lo, hi)``.  GetRandom samples from a cumulative table of ``Npx``
-points (BaseRadioGen keeps ROOT's default, 100) with a parabolic interpolation
-inside each bin, so for a feature narrower than (hi - lo) / Npx the generated
-distribution differs from the formula.  A :class:`Distribution` (one formula
-on one range with one Npx, best obtained from the cached factory
-:func:`distribution`) describes both:
+The code's one full account of how the generator samples these formulas (the
+other modules point here; the README's bki-distrib section is the user's).
 
-* the formula: :meth:`~Distribution.eval`, :meth:`~Distribution.formula_pdf`,
-  :meth:`~Distribution.formula_interval`, :meth:`~Distribution.formula_fraction`;
-* the generated distribution: :meth:`~Distribution.quantiles`
-  (TF1::GetQuantiles, ROOT's own table, deterministic),
-  :meth:`~Distribution.cdf`, :meth:`~Distribution.pdf`,
-  :meth:`~Distribution.interval`, and :meth:`~Distribution.sample`
-  (TF1::GetRandom).
+larsimrad's BaseRadioGen samples each axis independently.  distrib_<axis> is
+a 1D formula in the variable x, built as ``TF1(name, formula, lo, hi)`` over
+the box range on that axis (X0..X1, the volume_rand bounding box, or a
+volume_gen node's box) and drawn with ``GetRandom(lo, hi)``.  The formulas are
+ROOT TFormula expressions, so they are evaluated by ROOT itself, never
+translated.
+
+GetRandom draws from a table, not from the formula: it integrates the formula
+over Npx equal bins of [lo, hi], approximates the cumulative inside each bin
+by a parabola, and inverts that.  BaseRadioGen never calls SetNpx, so ROOT's
+default Npx = 100 applies (:data:`GENERATOR_NPX`): over the 850 cm of
+volCryostat the bins are 8.5 cm wide.  Each bin keeps its probability, but
+the generated density is linear inside it, so a feature narrower than
+(hi - lo) / Npx is not reproduced: the upper-mesh K42 Gaussian (sigma 0.5 cm
+at x = -320 cm on a constant) is generated as a ramp across its 8.5 cm bin, as
+the decay vertices of a lar job confirm (tests/test_tf1.py).  Smooth profiles
+are not affected.
+
+The generated distribution is read from ROOT's own table, without sampling:
+:meth:`Distribution.quantiles` calls TF1::GetQuantiles, which builds the same
+table but with max(Npx, 2 n) points for n probabilities, so it is asked at
+most Npx / 2 probabilities per call to stay on GetRandom's Npx-point table.
+The CDF tabulated from it at 20001 probabilities gives
+:meth:`~Distribution.cdf`, :meth:`~Distribution.pdf` and
+:meth:`~Distribution.interval`; :meth:`~Distribution.sample` calls GetRandom
+itself.  The formula is evaluated with TF1::Eval
+(:meth:`~Distribution.eval`), clipped at 0 and normalised over [lo, hi] on a
+dense 400001-point grid (TF1::Integral misses peaks much narrower than the
+range): :meth:`~Distribution.formula_pdf`,
+:meth:`~Distribution.formula_interval`, :meth:`~Distribution.formula_fraction`.
+
+An effective range is the shortest interval holding a fraction `containment`
+of a distribution.  bki-extract writes both, per axis: that of the generated
+distribution (``distrib_<axis>_eff_range``, which becomes the box on that
+axis) and that of the formula (``distrib_<axis>_formula_eff_range``).  For the
+mesh Gaussian at 0.99 they are [-323.08, -318.75] and [-321.70, -318.33] cm;
+with Npx = 10000 (:meth:`~Distribution.with_npx`) the generated one matches
+the formula's.
+
+A :class:`Distribution` is one formula on one range with one Npx, best
+obtained from the cached factory :func:`distribution`.
 
 Not modelled: the generator also redraws points that land outside the
 volumes allowed by volume_gen / material (e.g. the gas above the liquid).
@@ -94,7 +121,8 @@ class Distribution:
 
     Owns its TF1 (kept out of ROOT's global list of functions, so it is
     deleted with this object and its name never clashes).  Raises ValueError
-    when ROOT cannot parse the formula, ROOTUnavailable without PyROOT."""
+    when ROOT cannot parse the formula, duneradgeo._root.ROOTUnavailable
+    without PyROOT."""
 
     def __init__(self, formula: str, lo: float, hi: float, npx: int = GENERATOR_NPX):
         ROOT = _root()
@@ -163,11 +191,9 @@ class Distribution:
     # ---- the generated distribution (TF1::GetRandom) ----------------------
 
     def quantiles(self, p) -> np.ndarray:
-        """Quantiles of the GetRandom(lo, hi) distribution, from ROOT's own CDF
-        table (TF1::GetQuantiles): deterministic, no sampling.  `p` increasing
-        in [0, 1]."""
-        # GetQuantiles builds its table with max(Npx, 2 * len(p)) points, so ask for
-        # at most Npx / 2 probabilities per call to stay on GetRandom's Npx table.
+        """Quantiles of the GetRandom(lo, hi) distribution at `p` (increasing
+        in [0, 1]), from TF1::GetQuantiles: deterministic, no sampling."""
+        # at most Npx / 2 probabilities per call: see the module docstring
         p = np.ascontiguousarray(p, dtype=float)
         q = np.empty_like(p)
         step = max(1, self.npx // 2)

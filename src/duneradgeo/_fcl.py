@@ -1,7 +1,8 @@
 """FHiCL parser and radiological-volume extractor.
 
 The parser needs no PyROOT; the distrib_x/y/z effective ranges are evaluated
-by ROOT (see _tf1, which imports ROOT only when a formula is evaluated)."""
+by ROOT (duneradgeo._tf1, which imports ROOT only when a formula is
+evaluated)."""
 from __future__ import annotations
 
 import copy
@@ -392,12 +393,9 @@ def _surface_label(lo: list, hi: list) -> str:
 
 def _apply_distrib(rows: list[dict], cfg: dict, containment: float, npx: int) -> None:
     """Add the distrib_<ax> keys of `cfg` to `rows`, in place, and narrow each
-    row's box on that axis to the effective range.
-
-    BaseRadioGen (larsimrad) samples each axis independently: distrib_<ax> is a
-    1D TF1 in the variable x, drawn with GetRandom over the box range on that
-    axis (X0..X1, the volume_rand bounding box, or the volume_gen node's box).
-    Needs PyROOT (raises ROOTUnavailable)."""
+    row's box on that axis to the effective range of the generated
+    distribution (how BaseRadioGen samples it: see duneradgeo._tf1).
+    Needs PyROOT (raises duneradgeo._root.ROOTUnavailable)."""
     for ax, axis in enumerate(DISTRIB_AXES):
         keys = distrib_keys(axis)
         if keys["formula"] not in cfg:
@@ -436,8 +434,9 @@ def producer_volumes(name: str, cfg: dict, geo=None,
       with a distribution: distrib_<ax>, distrib_<ax>_range (full box range on that
       axis), distrib_<ax>_eff_range (effective range: shortest interval holding
       `containment` of the distribution TF1::GetRandom generates with `npx`
-      points; becomes lo/hi on that axis), distrib_<ax>_formula_eff_range (the same
-      for the formula pdf), distrib_eff_containment and distrib_eff_npx
+      points, see duneradgeo._tf1; becomes lo/hi on that axis),
+      distrib_<ax>_formula_eff_range (the same for the formula pdf),
+      distrib_eff_containment and distrib_eff_npx
     """
     mt   = cfg.get("module_type")
     rows = []

@@ -8,35 +8,30 @@ Usage:
       --anode-pattern 'volAnodePlate' --opdet-pattern '^volArapuca'
   bki-extract geometry.gdml --out ir.json --frame volEnclosureTPC
 
-If a FCL file is given:
-  * #include directives are resolved automatically via $FHICL_FILE_PATH
-  * radiological producers (RadioGen / Decay0Gen) → kind="radio" volumes,
-    and each producer's full FHiCL table → the IR's top-level "producers"
-  * the GDML filename is extracted from AuxDetGeometry.GDML and used to
-    populate anode / opdet / cathode / fieldshaper / struct volumes as well.
-  * producers with distrib_x/y/z: the formulas are evaluated with ROOT (TF1),
-    so PyROOT is required; the box on that axis becomes the effective range
-    of the distribution TF1::GetRandom generates (--npx, --containment).
+From a FCL file (#includes expanded by fhicl-dump, else via $FHICL_FILE_PATH):
+  * RadioGen / Decay0Gen producers → kind="radio" volumes, and each
+    producer's full FHiCL table → the IR's top-level "producers";
+  * the GDML named in AuxDetGeometry.GDML → the detector volumes
+    (anode / opdet / cathode / fieldshaper / struct) and the radio boxes;
+  * a distrib_x/y/z formula (needs PyROOT) narrows the box on that axis to
+    the effective range of what TF1::GetRandom generates (--npx,
+    --containment; see duneradgeo._tf1).
 
-The refactored and the ggd-generated VD GDMLs use the same volume names but
-nest the cryostat differently (ggd adds volSupportEnc/volEnclosureCryostat),
-so their world coordinates differ by a global offset.  --frame expresses
-every volume in the frame of one placed volume (e.g. volEnclosureTPC) and
-records its world placement in the IR, so IRs of both kinds overlay.
---with-passive adds the profile's passive material (steel shell, insulation,
-support structure, shielding, cavern) as struct volumes.
+--frame expresses every volume in the frame of one singly placed volume and
+records its world placement in the IR: the refactored and the ggd-generated
+VD GDMLs nest the cryostat differently (a global offset), so their IRs in
+the frame of volEnclosureTPC overlay.  --with-passive adds the profile's
+passive material (steel shell, insulation, support, shielding, cavern) as
+struct volumes.  --gdml-backend root reads the GDML with ROOT
+(TGeoManager::Import); scripts/compare_ir.py compares the two backends' IRs.
 
---gdml-backend root reads the GDML with ROOT (TGeoManager::Import) instead
-of the built-in parser; both feed the same search, so IRs from the two
-backends can be compared with scripts/compare_ir.py.
+Non-box solids become boxes: tubes and tori their bounding box, unions one
+box per primitive operand (e.g. each straight tube and corner of a
+field-shaper ring), subtractions and intersections their first operand.  A
+radio volume_rand / volume_gen box is the ROOT bounding box of the volume's
+solid (a union: the whole composite), as BaseRadioGen samples it.
 
-Non-box solids are approximated by boxes: tubes and tori by their bounding
-box, unions by one box per operand (e.g. each straight tube and corner of a
-field-shaper ring), subtractions by their outer (first) operand.  A radio
-volume_rand / volume_gen box is the bounding box of the volume's solid (a
-union: the whole composite) in the world, as BaseRadioGen samples it.
-
-Output is a JSON file readable by bki-plot and the nb_B notebook.
+Output: a JSON IR, read by bki-plot, bki-distrib and the nb_B notebook.
 """
 from __future__ import annotations
 

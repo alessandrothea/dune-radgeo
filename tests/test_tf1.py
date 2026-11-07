@@ -7,9 +7,9 @@ Reference: the upper-mesh K42 producer of
 prodbackground_radiological_decay0_dunevd10kt_1x8x14_3view_30deg.fcl
 (dunesw v10_26_00d05), sampled over the volCryostat x range.  LAR_QUANTILES are
 the 0.5/16/50/84 % quantiles of the x of 2.37M decay vertices written by
-Decay0Gen in a lar job (ROOT 6.28/12): BaseRadioGen draws with
-TF1::GetRandom and ROOT's default Npx = 100, which turns the 0.5 cm Gaussian
-into a ramp over the 8.5 cm table bin [-323.08, -314.58].
+Decay0Gen in a lar job (ROOT 6.28/12).  GetRandom's Npx = 100 table turns the
+0.5 cm Gaussian into a ramp over its 8.5 cm bin [-323.08, -314.58] (see
+duneradgeo._tf1).
 """
 import numpy as np
 
@@ -80,8 +80,8 @@ def test_generated_matches_lar():
 
 
 def test_quantile_batching():
-    """Many probabilities give the same quantiles as a few: GetQuantiles
-    would otherwise switch to a finer table (max(Npx, 2 * n) points)."""
+    """Many probabilities give the same quantiles as a few (the Npx / 2
+    batching of Distribution.quantiles)."""
     many = _d(MESH).quantiles(np.linspace(0, 1, 2001))
     few = _d(MESH).quantiles(P)
     assert np.allclose(np.interp(P, np.linspace(0, 1, 2001), many), few, atol=0.01)
