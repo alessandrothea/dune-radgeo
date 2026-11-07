@@ -43,6 +43,17 @@ def test_invalid_formula():
     raise AssertionError("an unparsable formula must raise ValueError")
 
 
+def test_narrow_peak_accepted():
+    """bki-distrib validates a formula by building its TF1: a peak much
+    narrower than the range is valid, although it vanishes at lo, mid and hi
+    (a 3-point integral of it is 0); its effective range comes from the dense
+    formula grid."""
+    narrow = "TMath::Gaus(x,100,1)"
+    _tf1.tf1(narrow, LO, HI)
+    form = _tf1.formula_interval(narrow, LO, HI, 0.99)
+    assert np.allclose(form, (97.40, 102.55), atol=0.01), form
+
+
 def test_generated_matches_lar():
     """GetRandom's table (Npx = 100) reproduces the lar decay vertices."""
     q = _tf1.quantiles(MESH, LO, HI, P)

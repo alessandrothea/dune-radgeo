@@ -552,13 +552,13 @@ def main() -> None:
     print(f"[info] {len(groups)} distribution(s) from "
           f"{sum(len(g.producers) for g in groups)} producer entr(ies)", file=sys.stderr)
 
-    # every group is evaluated by ROOT; drop those whose formula it rejects
+    # every group is evaluated by ROOT; drop those whose formula it cannot parse
     kept = []
     for g in groups:
         try:
             if args.npx:
                 with_npx(g, args.npx)
-            _tf1.formula_pdf(g.formula, *g.rng, npts=3)
+            _tf1.tf1(g.formula, *g.rng)       # raises ValueError on a parse failure
             kept.append(g)
         except _tf1.ROOTUnavailable as exc:
             sys.exit(f"[error] {exc}")
