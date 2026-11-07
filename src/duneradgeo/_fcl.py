@@ -232,6 +232,24 @@ def _assign(target: dict, key: str, value):
         node[last] = value
 
 
+_SIMPLE_ESC = {"n": "\n", "t": "\t", "r": "\r", "a": "\a", "b": "\b", "f": "\f",
+               "v": "\v", "\\": "\\", "'": "'", '"': '"', "\n": ""}
+_ESC_RE = re.compile(r"\\(?:([ntrabfv\\'\"\n])|([0-7]{1,3})|x([0-9a-fA-F]{2})"
+                    r"|u([0-9a-fA-F]{4})|U([0-9a-fA-F]{8}))")
+
+
+def _unescape(s: str) -> str:
+    """Decode the backslash escapes of a double-quoted string (the C ones that
+    ``unicode_escape`` knows), leaving every other character untouched."""
+    def rep(m):
+        if m.group(1) is not None:
+            return _SIMPLE_ESC[m.group(1)]
+        if m.group(2) is not None:
+            return chr(int(m.group(2), 8))
+        return chr(int(m.group(3) or m.group(4) or m.group(5), 16))
+    return _ESC_RE.sub(rep, s)
+
+
 class FhiclParser:
     """Parse a FHiCL document; text must already be expanded (no #includes)."""
 
@@ -282,8 +300,7 @@ class FhiclParser:
         if k == "number":  return float(v)
         if k == "inf":     return -math.inf if v[0] == "-" else math.inf
         if k == "string":
-            return (bytes(v[1:-1], "utf-8").decode("unicode_escape")
-                    if v[0] == '"' else v[1:-1])
+            return _unescape(v[1:-1]) if v[0] == '"' else v[1:-1]
         if k == "ident":
             low = v.lower()
             if low in ("true", "false"):    return low == "true"
@@ -458,13 +475,18 @@ def producer_volumes(name: str, cfg: dict, geo=None,
                 material=cfg.get("material", ".*"),
                 rate=cfg.get("rate"), BqPercc=cfg.get("BqPercc"))
 
+    iso = cfg.get("isotope")
+    if iso is None and isinstance(cfg.get("decay_chain"), dict):
+        iso = "+".join(cfg["decay_chain"][k] for k in
+                       sorted(cfg["decay_chain"], key=lambda s: int(s.split("_")[-1])))
+
     if any(k in cfg for k in BOX_KEYS):
         missing = [k for k in BOX_KEYS if k not in cfg]
         if missing:
             raise ValueError(f"{name}: incomplete box, missing {missing}")
         n    = max(len(cfg[k]) if isinstance(cfg[k], list) else 1 for k in BOX_KEYS)
         cols = {k: _as_list(cfg[k], n) for k in BOX_KEYS + ("T0", "T1") if k in cfg}
-        nucl = _as_list(cfg.get("Nuclide", cfg.get("isotope", "")), n)
+        nucl = _as_list(cfg.get("Nuclide", iso if iso is not None else ""), n)
         bq   = _as_list(cfg.get("BqPercc"), n) if "BqPercc" in cfg else [None] * n
         for i in range(n):
             lo = [cols["X0"][i], cols["Y0"][i], cols["Z0"][i]]
@@ -506,10 +528,6 @@ def producer_volumes(name: str, cfg: dict, geo=None,
                              lo=None, hi=None))
 
     if mt != "RadioGen":
-        iso = cfg.get("isotope")
-        if iso is None and isinstance(cfg.get("decay_chain"), dict):
-            iso = "+".join(cfg["decay_chain"][k] for k in
-                           sorted(cfg["decay_chain"], key=lambda s: int(s.split("_")[-1])))
         for r in rows:
             r.setdefault("nuclide", iso)
 

@@ -16,7 +16,7 @@ import tempfile
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _runner import run_tests, xfail  # noqa: E402
+from _runner import run_tests  # noqa: E402
 
 from duneradgeo._fcl import FhiclParser, expand_fcl, producer_volumes  # noqa: E402
 from duneradgeo._gdml import GDMLGeometry  # noqa: E402
@@ -92,8 +92,6 @@ def test_signed_infinity():
     assert d["c"] == [-math.inf, math.inf]
 
 
-@xfail("double-quoted strings are decoded with 'unicode_escape' after a UTF-8 "
-       "encode, which turns non-ASCII characters into mojibake")
 def test_non_ascii_string():
     assert parse('s: "été → \\"x\\""')["s"] == 'été → "x"'
 
@@ -438,8 +436,6 @@ def test_decay0gen_nuclide():
     assert rows[0]["nuclide"] == "Ar39"
 
 
-@xfail("an explicit X0..Z1 box fills nuclide from Nuclide/isotope (default ''), "
-       "so the decay_chain fallback (setdefault) never applies: nuclide is ''")
 def test_decay0gen_explicit_decay_chain():
     cfg = dict(module_type="Decay0Gen", decay_chain={"isotope_1": "Bi214", "isotope_2": "Pb214"},
                X0=0, X1=1, Y0=0, Y1=1, Z0=0, Z1=1)

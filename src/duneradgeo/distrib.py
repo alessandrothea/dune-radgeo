@@ -213,11 +213,10 @@ def _tidy(s: str) -> str:
 
 def _terms(formula: str) -> list[str]:
     """The formula split before each top-level '+' / '-' (not an exponent sign);
-    the pieces concatenate back to the formula without spaces."""
-    s = formula.replace(" ", "")
+    the pieces concatenate back to the formula exactly (spaces included)."""
     terms, cur, depth = [], "", 0
-    for ch in s:
-        if ch in "+-" and depth == 0 and cur and not _EXP_SIGN.search(cur):
+    for ch in formula:
+        if ch in "+-" and depth == 0 and cur.strip() and not _EXP_SIGN.search(cur.rstrip()):
             terms.append(cur)
             cur = ch
             continue
@@ -233,7 +232,7 @@ def raw_formula_lines(formula: str, axis: str = "x", width: int = 86) -> list[st
     lead = f'distrib_{axis}: "'
     pad = " " * len(lead)
     avail = max(20, width - len(lead))
-    lines, cur = [], ""
+    lines, cur, last = [], "", ""
     for term in _terms(formula):
         while len(term) > avail:                       # a single over-long term
             if cur:
@@ -245,6 +244,15 @@ def raw_formula_lines(formula: str, axis: str = "x", width: int = 86) -> list[st
             lines.append(cur)
             cur = ""
         cur += term
+        last = term
+    if len(cur) + 1 > avail:                           # room for the closing quote
+        head = cur[:len(cur) - len(last)]
+        if head:
+            lines.append(head)
+            cur = last
+        if len(cur) + 1 > avail:
+            lines.append(cur[:avail - 1])
+            cur = cur[avail - 1:]
     lines.append(cur + '"')
     return [(lead if k == 0 else pad) + s for k, s in enumerate(lines)]
 
@@ -255,13 +263,17 @@ def formula_lines(formula: str, width: int = 70) -> list[str]:
     ``f(x) = a`` / ``     + b`` …, with TMath:: dropped, Abs(a) as |a|,
     Power(a,n) as a^n and '*' as '·'.  Monospace layout, for display only.
     """
-    terms = _terms(formula)
+    terms = _terms(formula.replace(" ", ""))
 
     lead, pad = "f(x) = ", " " * 7
     lines = []
     for k, term in enumerate(terms):
         sign, body = ("", term) if term[0] not in "+-" else (term[0], term[1:])
-        body = _tidy(_strip_outer(body))
+        body = _strip_outer(body)
+        keep = sign == "-" and len(_terms(body)) > 1   # -(a+b) is not -a+b
+        body = _tidy(body)
+        if keep:
+            body = f"({body})"
         if k == 0:
             first, prefix = lead + ("-" if sign == "-" else ""), pad
         else:
