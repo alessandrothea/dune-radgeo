@@ -222,10 +222,10 @@ def _fcl_radio_volumes(doc: dict,
             meta = {k: r.get(k) for k in
                     ("source", "node", "nuclide", "module_type", "BqPercc",
                      "rate", "surface", "T0", "T1",
-                     "distrib_x", "x_range", "x_eff_range", "x_formula_eff_range",
-                     "distrib_y", "y_range", "y_eff_range", "y_formula_eff_range",
-                     "distrib_z", "z_range", "z_eff_range", "z_formula_eff_range",
-                     "eff_containment", "eff_npx")
+                     "distrib_x", "distrib_x_range", "distrib_x_eff_range", "distrib_x_formula_eff_range",
+                     "distrib_y", "distrib_y_range", "distrib_y_eff_range", "distrib_y_formula_eff_range",
+                     "distrib_z", "distrib_z_range", "distrib_z_eff_range", "distrib_z_formula_eff_range",
+                     "distrib_eff_containment", "distrib_eff_npx")
                     if r.get(k) is not None}
             meta["index"] = r["index"]
             entries.append(VolumeEntry(kind="radio", name=name,

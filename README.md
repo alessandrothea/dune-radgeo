@@ -209,10 +209,10 @@ bki-extract <input> --out <ir.json>
   --select REGEX      regex filter on producer labels
   --all-configured    include producers not on any trigger path
   --containment F     distrib_x/y/z containment fraction for the effective
-                      ranges, stored as meta.eff_containment (default 0.99)
+                      ranges, stored as meta.distrib_eff_containment (default 0.99)
   --npx N             TF1 Npx of the generator: the effective range is that of
                       the distribution TF1::GetRandom draws from an N-point
-                      table, stored as meta.eff_npx (default 100, ROOT's
+                      table, stored as meta.distrib_eff_npx (default 100, ROOT's
                       default, which larsimrad BaseRadioGen keeps)
   --fcl-cache DIR     cache directory for expanded FCL files
                       (default: ~/.cache/bki-extract/fcl)
@@ -387,10 +387,10 @@ holds the reference quantiles). Smooth profiles, such as the bulk LAr ones,
 are not affected.
 
 `bki-extract` records, per axis with a formula, the full range
-(`<axis>_range`), the shortest interval holding `--containment` of the
-generated distribution (`<axis>_eff_range`, the effective range, which
+(`distrib_<axis>_range`), the shortest interval holding `--containment` of the
+generated distribution (`distrib_<axis>_eff_range`, the effective range, which
 becomes the box on that axis) and the same for the formula
-(`<axis>_formula_eff_range`), plus `eff_containment` and `eff_npx`.
+(`distrib_<axis>_formula_eff_range`), plus `distrib_eff_containment` and `distrib_eff_npx`.
 
 `bki-distrib` draws, over the full range, the formula (black) and the
 generated distribution (blue), shades the generated effective range and
@@ -412,7 +412,7 @@ bki-distrib <ir.json> [options]
   --radio PATTERN …   regex filter on radio producer names
   --pick SPEC …       PRODUCER_RE#SEL, as for bki-plot --surface
   --axis {x,y,z} …    only these axes
-  --npx N             Npx of the generated distribution (default: eff_npx from
+  --npx N             Npx of the generated distribution (default: distrib_eff_npx from
                       the IR); another value recomputes its effective range,
                       e.g. --npx 10000 for a generator that sets SetNpx(10000)
   --log               logarithmic y axis
@@ -434,9 +434,10 @@ bki-distrib radbkg.json --list --radio 'UpperMesh'
 #     ...
 ```
 
-Each page has the formula (monospace, one term per line, with `TMath::`
-dropped, `Abs(a)` as `|a|` and `Power(a,n)` as `a^n`, for display only;
-`--list` prints the exact FHiCL string), and a side panel with the full and
+Each page has the formula in monospace, twice: exactly as in the FHiCL
+(`distrib_x: "…"`, wrapped between top-level terms, nothing added or
+dropped), then compacted for reading (one term per line, `TMath::` dropped,
+`Abs(a)` as `|a|`, `Power(a,n)` as `a^n`, `*` as `·`). A side panel has the full and
 both effective ranges, the containment (stored, and measured for each
 distribution), `Npx`, the generator volume (`meta.source`) and the producers
 with their nuclides.
@@ -780,9 +781,9 @@ bki-plot planes.json -L --kind struct --highlight '^volTPCPlaneU$#@_PV_Bot'
                "module_type": "Decay0Gen", "rate": 1.94372,
                "surface": "plane_x@-320.917",
                "distrib_x": "(7.2257e+4*TMath::Exp(-(x+320.)*(x+320.)/(2.*0.5*0.5)))+1.",
-               "x_range": [-425.12, 425.20], "x_eff_range": [-323.082, -318.753],
-               "x_formula_eff_range": [-321.704, -318.328],
-               "eff_containment": 0.99, "eff_npx": 100, "index": 0}
+               "distrib_x_range": [-425.12, 425.20], "distrib_x_eff_range": [-323.082, -318.753],
+               "distrib_x_formula_eff_range": [-321.704, -318.328],
+               "distrib_eff_containment": 0.99, "distrib_eff_npx": 100, "index": 0}
     }
   ]
 }
@@ -797,11 +798,11 @@ bki-plot planes.json -L --kind struct --highlight '^volTPCPlaneU$#@_PV_Bot'
 | `meta` | kind-specific metadata: GDML placement `path` for geometry volumes (see [Picking individual placements](#picking-individual-placements)) and, when the GDML names its physvols (ggd), the physvol name `pv` and the physvol names along the path `pvpath` (`placeDetEnclosure/…/volTPC_PV_Bot0/volTPCPlaneU_PV`); nuclide, BqPercc, surface, index, … for radio |
 
 For radio entries, `meta` also holds, for each axis with a `distrib_<axis>`
-formula: the formula, `<axis>_range` (the full box range it is sampled over,
-the source of truth), `<axis>_eff_range` (the effective range: the shortest
-interval holding `eff_containment` of the distribution `TF1::GetRandom`
-generates with `eff_npx` table points, which becomes the box extent on that
-axis) and `<axis>_formula_eff_range` (the same for the formula pdf). The
+formula: the formula, `distrib_<axis>_range` (the full box range it is sampled over,
+the source of truth), `distrib_<axis>_eff_range` (the effective range: the shortest
+interval holding `distrib_eff_containment` of the distribution `TF1::GetRandom`
+generates with `distrib_eff_npx` table points, which becomes the box extent on that
+axis) and `distrib_<axis>_formula_eff_range` (the same for the formula pdf). The
 effective ranges are derived by `bki-extract` with ROOT, not module
 parameters. These are world coordinates. The box (`pos`/`ext`) is the full
 box on the axes without a formula and the effective range on the others.

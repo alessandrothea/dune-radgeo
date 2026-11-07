@@ -411,11 +411,11 @@ def producer_volumes(name: str, cfg: dict, geo=None,
     Returns a list of dicts with keys:
       producer, module_type, index, source, nuclide, material,
       lo [x,y,z], hi [x,y,z], surface, T0, T1, BqPercc, rate, and per axis
-      with a distribution: distrib_<ax>, <ax>_range (full box range on that
-      axis), <ax>_eff_range (effective range: shortest interval holding
+      with a distribution: distrib_<ax>, distrib_<ax>_range (full box range on that
+      axis), distrib_<ax>_eff_range (effective range: shortest interval holding
       `containment` of the distribution TF1::GetRandom generates with `npx`
-      points; becomes lo/hi on that axis), <ax>_formula_eff_range (the same
-      for the formula pdf), eff_containment and eff_npx
+      points; becomes lo/hi on that axis), distrib_<ax>_formula_eff_range (the same
+      for the formula pdf), distrib_eff_containment and distrib_eff_npx
     """
     mt   = cfg.get("module_type")
     rows = []
@@ -491,11 +491,11 @@ def producer_volumes(name: str, cfg: dict, geo=None,
             if r["lo"] is not None and r["lo"][ax] is not None:
                 lo, hi = r["lo"][ax], r["hi"][ax]
                 a, b = x_interval(cfg[key], lo, hi, containment, npx)
-                r[f"{axis}_range"] = [lo, hi]     # range distrib_<ax> is sampled over
-                r[f"{axis}_eff_range"] = [a, b]   # effective range of what GetRandom generates
-                r[f"{axis}_formula_eff_range"] = list(x_interval(cfg[key], lo, hi, containment))
-                r["eff_containment"] = containment  # fraction of the distribution in the eff range
-                r["eff_npx"] = npx                  # TF1 Npx the generated distribution assumes
+                r[f"distrib_{axis}_range"] = [lo, hi]     # range distrib_<ax> is sampled over
+                r[f"distrib_{axis}_eff_range"] = [a, b]   # effective range of what GetRandom generates
+                r[f"distrib_{axis}_formula_eff_range"] = list(x_interval(cfg[key], lo, hi, containment))
+                r["distrib_eff_containment"] = containment  # fraction of the distribution in the eff range
+                r["distrib_eff_npx"] = npx                  # TF1 Npx the generated distribution assumes
                 r["lo"] = r["lo"][:ax] + [a] + r["lo"][ax + 1:]
                 r["hi"] = r["hi"][:ax] + [b] + r["hi"][ax + 1:]
 

@@ -11,7 +11,7 @@ Each page shows, over the full range:
   * the distribution as generated, from ROOT's own GetRandom table
     (TF1::GetQuantiles with Npx points);
 with the effective range of the generated distribution shaded (the box
-bki-extract writes, <axis>_eff_range) and that of the formula marked.
+bki-extract writes, distrib_<axis>_eff_range) and that of the formula marked.
 Producers sharing a formula and range share one plot; each plot is a page of
 the PDF (other formats: one file per plot).  Needs PyROOT.  Not modelled: the
 redraw of points outside the volumes allowed by volume_gen / material (e.g.
@@ -25,8 +25,8 @@ Usage:
   bki-distrib detector.json --list              # text only, no matplotlib
   bki-distrib detector.json --radio 'Mesh|Cathode'
 
-Reads <axis>_range, <axis>_eff_range, <axis>_formula_eff_range,
-eff_containment and eff_npx from the IR, as written by bki-extract.
+Reads distrib_<axis>_range, distrib_<axis>_eff_range, distrib_<axis>_formula_eff_range,
+distrib_eff_containment and distrib_eff_npx from the IR, as written by bki-extract.
 """
 from __future__ import annotations
 
@@ -74,7 +74,7 @@ def _key_range(r) -> tuple:
     return tuple(round(float(v), 3) for v in r)
 
 
-_KEYS = ("{a}_range", "{a}_eff_range", "{a}_formula_eff_range")
+_KEYS = ("distrib_{a}_range", "distrib_{a}_eff_range", "distrib_{a}_formula_eff_range")
 
 
 def collect(vols: list[VolumeEntry]) -> list[DistribGroup]:
@@ -90,13 +90,13 @@ def collect(vols: list[VolumeEntry]) -> list[DistribGroup]:
             formula = m.get(f"distrib_{axis}")
             if not formula:
                 continue
-            need = [k.format(a=axis) for k in _KEYS] + ["eff_containment", "eff_npx"]
+            need = [k.format(a=axis) for k in _KEYS] + ["distrib_eff_containment", "distrib_eff_npx"]
             missing = [k for k in need if k not in m]
             if missing:
                 raise ValueError(f"{v.name}: IR entry lacks {', '.join(missing)}; "
                                  f"re-run bki-extract")
             rng, eff, feff = (tuple(map(float, m[k.format(a=axis)])) for k in _KEYS)
-            cont, npx = float(m["eff_containment"]), int(m["eff_npx"])
+            cont, npx = float(m["distrib_eff_containment"]), int(m["distrib_eff_npx"])
             key = (axis, formula, _key_range(rng), _key_range(eff), _key_range(feff),
                    cont, npx)
             g = groups.get(key)
@@ -204,12 +204,9 @@ def _tidy(s: str) -> str:
     return s.replace("*", "·")
 
 
-def formula_lines(formula: str, width: int = 70) -> list[str]:
-    """
-    The TF1 formula split into its top-level terms, one per line:
-    ``f(x) = a`` / ``     + b`` …, with TMath:: dropped, Abs(a) as |a|,
-    Power(a,n) as a^n and '*' as '·'.  Monospace layout.
-    """
+def _terms(formula: str) -> list[str]:
+    """The formula split before each top-level '+' / '-' (not an exponent sign);
+    the pieces concatenate back to the formula without spaces."""
     s = formula.replace(" ", "")
     terms, cur, depth = [], "", 0
     for ch in s:
@@ -220,6 +217,38 @@ def formula_lines(formula: str, width: int = 70) -> list[str]:
         depth += (ch == "(") - (ch == ")")
         cur += ch
     terms.append(cur)
+    return terms
+
+
+def raw_formula_lines(formula: str, axis: str = "x", width: int = 86) -> list[str]:
+    """The formula exactly as in the FHiCL, ``distrib_x: "…"``, wrapped at
+    top-level terms (no characters added or dropped)."""
+    lead = f'distrib_{axis}: "'
+    pad = " " * len(lead)
+    avail = max(20, width - len(lead))
+    lines, cur = [], ""
+    for term in _terms(formula):
+        while len(term) > avail:                       # a single over-long term
+            if cur:
+                lines.append(cur)
+                cur = ""
+            lines.append(term[:avail])
+            term = term[avail:]
+        if cur and len(cur) + len(term) > avail:
+            lines.append(cur)
+            cur = ""
+        cur += term
+    lines.append(cur + '"')
+    return [(lead if k == 0 else pad) + s for k, s in enumerate(lines)]
+
+
+def formula_lines(formula: str, width: int = 70) -> list[str]:
+    """
+    The TF1 formula split into its top-level terms, one per line:
+    ``f(x) = a`` / ``     + b`` …, with TMath:: dropped, Abs(a) as |a|,
+    Power(a,n) as a^n and '*' as '·'.  Monospace layout, for display only.
+    """
+    terms = _terms(formula)
 
     lead, pad = "f(x) = ", " " * 7
     lines = []
@@ -254,10 +283,11 @@ _ZOOM_FRAC   = 0.5       # zoom when the eff range is narrower than this × rang
 _ZOOM_MARGIN = 0.25      # zoom window: eff range ± this × its width
 
 
-def _mono_size(lines: list[str], fig, x0: float, base: float) -> float:
-    """Largest size <= `base` at which the longest mono line fits in [x0, 0.985]."""
+def _mono_size(lines: list[str], fig, x0: float, base: float,
+               right: float = 0.985) -> float:
+    """Largest size <= `base` at which the longest mono line fits in [x0, right]."""
     chars = max((len(s) for s in lines), default=1)
-    avail = (0.985 - x0) * fig.get_figwidth() * 72          # points
+    avail = (right - x0) * fig.get_figwidth() * 72          # points
     return min(base, avail / (0.61 * chars))
 
 
@@ -298,8 +328,10 @@ def zoom_window(g: DistribGroup) -> tuple | None:
 def _draw_page(fig, g: DistribGroup, log: bool, source: str,
                page: int, npages: int, zoom: bool = True) -> None:
     """One distribution on `fig`: title, plot (+ zoom), formula box, side panel."""
-    flines = formula_lines(g.formula)
-    line_h = 10.5 * 1.45 / 72 / fig.get_figheight()          # one mono line, fig units
+    # the formula exactly as in the FHiCL, then the compacted version
+    flines = raw_formula_lines(g.formula, g.axis) + [""] + formula_lines(g.formula)
+    fsize = min(10.0, _mono_size(flines, fig, 0.065, 10.0, right=0.065 + _AX_W))
+    line_h = fsize * 1.45 / 72 / fig.get_figheight()          # one mono line, fig units
     box_top = 0.045 + len(flines) * line_h + 0.025
     ax_bottom = box_top + 0.085
 
@@ -338,7 +370,7 @@ def _draw_page(fig, g: DistribGroup, log: bool, source: str,
                        fontsize=10, loc="left", color=_GREY)
 
     # ---- formula (monospace) ----
-    fig.text(0.065, box_top - 0.012, "\n".join(flines), family=_MONO, fontsize=10.5,
+    fig.text(0.065, box_top - 0.012, "\n".join(flines), family=_MONO, fontsize=fsize,
              va="top", ha="left", linespacing=1.45,
              bbox=dict(boxstyle="round,pad=0.5", fc="0.96", ec="0.82"))
 
@@ -458,7 +490,7 @@ def main() -> None:
                     help="only these axes (default: all present)")
     ap.add_argument("--npx", type=int, default=None,
                     help="TF1 Npx for the generated distribution (default: the "
-                         "eff_npx stored in the IR); another value recomputes the "
+                         "distrib_eff_npx stored in the IR); another value recomputes the "
                          "generated effective range")
     ap.add_argument("--log", action="store_true", help="logarithmic y axis")
     ap.add_argument("--no-zoom", action="store_true",
