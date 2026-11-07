@@ -71,8 +71,6 @@ class GeometryBase:
         second operand and ``fpos, frot`` the first in the boolean's frame.
     ``_boxes``
         box solid → full extents ``(dx, dy, dz)``.
-    ``_solid_first``
-        boolean solid → its first operand.
     ``_shape_bbox``
         solid → ``(centre, ext)``, its local bounding box as the reader
         computed it (the ROOT backend: ROOT's own, for every shape).  Solids
@@ -89,7 +87,6 @@ class GeometryBase:
         self._bools: dict[str, tuple]      = {}
         self._vols:  dict[str, dict]       = {}
         self._world: str | None            = None
-        self._solid_first: dict[str, str]  = {}
         self._shape_bbox: dict[str, tuple] = {}
 
     # -- tree search -------------------------------------------------------
@@ -262,25 +259,6 @@ class GeometryBase:
             return None
         return self.solid_bbox(vol["solid"])
 
-    def box_extents(self, vol_name: str) -> np.ndarray | None:
-        """Full (dx,dy,dz) extents [cm] for vol_name; None if not a box.
-
-        For boolean solids (subtraction/union/intersection), follows the
-        first-reference chain until a box is found (cycle-safe).
-        """
-        vol = self._vols.get(vol_name)
-        if vol is None:
-            return None
-        solid = vol.get("solid", "")
-        seen: set[str] = set()
-        while solid and solid not in seen:
-            ext = self._boxes.get(solid)
-            if ext is not None:
-                return ext
-            seen.add(solid)
-            solid = self._solid_first.get(solid, "")
-        return None
-
 
 class GDMLGeometry(GeometryBase):
     """
@@ -405,8 +383,6 @@ class GDMLGeometry(GeometryBase):
             if child.tag in ("subtraction", "union", "intersection"):
                 first  = child.find("first")
                 second = child.find("second")
-                if first is not None:
-                    self._solid_first[child.get("name", "")] = first.get("ref", "")
                 if first is not None and second is not None:
                     pos, rot = self._parse_transform(child)
                     # the first operand is taken as placed at the origin

@@ -136,7 +136,6 @@ class RootGDMLGeometry(GeometryBase):
             pos,  rot  = _matrix(node.GetRightMatrix())
             op = _BOOL_OPS.get(int(node.GetBooleanOperator()), "unknown")
             self._bools[name] = (op, first, second, pos, rot, fpos, frot)
-            self._solid_first[name] = first
 
     def _add_volume(self, vol) -> None:
         shape = vol.GetShape()

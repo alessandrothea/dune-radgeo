@@ -135,9 +135,10 @@ def _cmp_placements(py, rt, kind: str, patterns: list[str], rep: _Report,
     bad_parts: list[str] = []
     for name in sorted({ha[p][0] for p in common}):
         why = _cmp_parts(py.volume_parts(name), rt.volume_parts(name), tol, rot_tol)
-        ea, eb = py.box_extents(name), rt.box_extents(name)
-        if (ea is None) != (eb is None) or (ea is not None and _maxdiff(ea, eb) > tol):
-            why = (why + "; " if why else "") + f"box_extents python {ea} root {eb}"
+        ba, bb = py.volume_bbox(name), rt.volume_bbox(name)
+        if (ba is None) != (bb is None) or (
+                ba is not None and max(_maxdiff(ba[0], bb[0]), _maxdiff(ba[1], bb[1])) > tol):
+            why = (why + "; " if why else "") + f"volume_bbox python {ba} root {bb}"
         if why:
             bad_parts.append(f"{name}: {why}")
     details = ([f"only in {'python' if p in ha else 'root'}: {p}" for p in only]

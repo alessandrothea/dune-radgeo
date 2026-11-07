@@ -338,6 +338,11 @@ def _world_aabb_per_hit(geo, patterns: list[str], label: str = "") -> list[tuple
     return out
 
 
+def _placed(geo, patterns: list[str]) -> bool:
+    """True if any volume matching `patterns` is placed in the geometry."""
+    return next(iter(geo.find_positions(patterns)), None) is not None
+
+
 def _world_aabb(geo, patterns: list[str], label: str = "") -> tuple | None:
     """
     World-frame axis-aligned box (lo, hi) enclosing every placement of the
@@ -467,7 +472,7 @@ def producer_volumes(name: str, cfg: dict, geo=None,
             bbox = _world_aabb(geo, [f"^{re.escape(vr)}$"], name)
             if bbox is not None:
                 lo, hi = bbox
-            else:
+            elif not _placed(geo, [f"^{re.escape(vr)}$"]):
                 print(f"[warn] {name}: volume_rand '{vr}' not found in geometry",
                       file=sys.stderr)
         rows.append(dict(base, index=0, source=f"volume_rand:{vr}", lo=lo, hi=hi))
@@ -481,8 +486,9 @@ def producer_volumes(name: str, cfg: dict, geo=None,
                                      source=f"volume_gen:{vg}",
                                      node=vname, lo=lo, hi=hi))
             else:
-                print(f"[warn] {name}: volume_gen '{vg}' not found in geometry",
-                      file=sys.stderr)
+                if not _placed(geo, [vg]):
+                    print(f"[warn] {name}: volume_gen '{vg}' not found in geometry",
+                          file=sys.stderr)
                 rows.append(dict(base, index=0, source=f"volume_gen:{vg}",
                                  lo=None, hi=None))
         else:

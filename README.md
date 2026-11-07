@@ -158,7 +158,7 @@ the axes change:
 ### 3. Radiological position profiles
 
 ```bash
-bki-distrib detector.json            # detector_distrib.pdf, one page per profile
+bki-distrib detector.json            # detector_distrib.pdf, one page per distribution
 bki-distrib detector.json --list     # the same as text
 ```
 
@@ -518,13 +518,15 @@ bki-extract dunevd10kt_v7_full10kt_ggd.gdml -o ggd_passive.json --with-passive
 | `python` (default) | built-in XML parser (`GDMLGeometry`) | NumPy |
 | `root` | `TGeoManager::Import` (`RootGDMLGeometry`) | ROOT with TGeo/GDML (dunesw) |
 
-Both fill the same tables (volumes and placements, box/tube/torus bounding
-boxes, boolean operands) and share the search, so placement paths, physvol
+Both fill the same tables (volumes and placements, box/tube/torus
+decomposition, boolean operands) and share the search, so placement paths, physvol
 names, frames and box decomposition are identical; only the parsing
 differs.  ROOT evaluates GDML expressions and units itself and computes
 each solid's bounding box; the built-in parser builds the same boxes,
-booleans included, as ROOT does (see [radio boxes](#radio-boxes)).  Solids
-other than box, tube, torus and their booleans are skipped by both.
+booleans included, as ROOT does (see [radio boxes](#radio-boxes)).  Detector
+volumes whose solids are not boxes, tubes, tori or their booleans are
+skipped by both; for radio boxes the ROOT backend still uses ROOT's
+bounding box, while the built-in parser warns and skips them.
 Reading with ROOT takes a few seconds instead of a fraction of one.
 
 `scripts/compare_backends.py` loads one or more GDMLs with both backends
