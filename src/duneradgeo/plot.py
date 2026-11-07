@@ -16,55 +16,20 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import re
 import sys
 from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
 
-from ._draw import BOX_FACES, box_corners_world, project_polygon
+from ._draw import BOX_FACES, aabb, box_corners_world, project_polygon
+from ._select import highlight_groups, parse_pick_spec, select_volumes, validate_picks
+from ._style import (ANODE_COL, CATHODE_COL, CONTEXT_COL, DIM_DEFAULT, FACE_ALPHA,
+                     FSHAPER_COL, HL_FACE_ALPHA, HL_LINEWIDTH, MAX_SURFACE_GROUPS,
+                     OPDET_COL, RADIO_COL, STRUCT_DEFAULT, STRUCT_PALETTE,
+                     SURFACE_PALETTE, THIN_FRAC, import_mpl)
 from .ir import IRCollection, VolumeEntry
 
-
-# ---------------------------------------------------------------------------
-# Colour/style constants
-# ---------------------------------------------------------------------------
-
-_ANODE_COL   = "royalblue"
-_OPDET_COL   = "darkorange"
-_CATHODE_COL = "teal"
-_FSHAPER_COL = "slategray"
-_RADIO_COL   = "crimson"
-_FACE_ALPHA  = 0.25
-_EDGE_ALPHA  = 0.6
-
-_STRUCT_PALETTE: dict[str, tuple] = {
-    "volTPCActive":      ("#4CAF50", 0.08),   # green
-    "volTPCActiveInner": ("#4CAF50", 0.08),
-    "volGaseousArgon":   ("#90CAF9", 0.18),   # light blue
-    "volTPC":            ("#FFF176", 0.06),   # pale yellow
-    "volCryostat":       ("#CE93D8", 0.05),   # pale purple
-}
-_STRUCT_DEFAULT = ("#BDBDBD", 0.08)
-
-# Per-surface colours used when individual radio surfaces are selected;
-# above this many groups the colouring collapses to one colour per producer.
-_SURFACE_PALETTE = ("tab:red", "tab:blue", "tab:green", "tab:purple",
-                    "tab:brown", "tab:pink", "tab:olive", "tab:cyan",
-                    "tab:orange", "tab:gray")
-_MAX_SURFACE_GROUPS = 20
-
-# --highlight: highlighted groups take _SURFACE_PALETTE colours, everything
-# else is drawn as grey context with face opacity `dim`.
-_CONTEXT_COL   = "#9E9E9E"
-# low: faces of overlapping context boxes stack up along the view direction
-_DIM_DEFAULT   = 0.02
-_HL_FACE_ALPHA = 0.45
-_HL_LINEWIDTH  = 1.2
-# a highlighted box whose 2D projection is thinner than this fraction of the
-# axis span is drawn as a line, so e.g. 0.02 cm wire planes stay visible
-_THIN_FRAC     = 0.004
 
 # Axis layouts, keyed by orientation.  World axes: 0 = x (drift),
 # 1 = y, 2 = z (beam).  "order3d" maps world axes onto the 3D plot's
@@ -88,165 +53,8 @@ _LAYOUTS: dict[str, dict] = {
 
 
 # ---------------------------------------------------------------------------
-# Volume selection
+# Helpers
 # ---------------------------------------------------------------------------
-
-def _parse_index_list(sel: str) -> set[int]:
-    """'0,2,5-7' → {0, 2, 5, 6, 7}."""
-    out: set[int] = set()
-    for tok in sel.split(","):
-        tok = tok.strip()
-        if not tok:
-            continue
-        a, sep, b = tok.partition("-")
-        if sep:
-            out.update(range(int(a), int(b) + 1))
-        else:
-            out.add(int(a))
-    return out
-
-
-def parse_pick_spec(spec: str) -> tuple:
-    """
-    Parse a ``NAME_RE#SEL`` selector (``--pick`` / ``--surface``).
-
-    ``SEL`` is either an index list (``0,2,5-7``, radio ``meta.index``) or
-    ``@REGEX`` matched against ``meta.surface``, ``meta.node``,
-    ``meta.nuclide`` (radio) and ``meta.path``, ``meta.part`` (geometry).
-
-    Returns (name_re, indices | None, match_re | None).
-    """
-    name, sep, sel = spec.rpartition("#")
-    if not sep or not name or not sel:
-        raise ValueError(f"bad spec '{spec}' (expected NAME_RE#SEL)")
-    if sel.startswith("@"):
-        return re.compile(name), None, re.compile(sel[1:])
-    try:
-        return re.compile(name), _parse_index_list(sel), None
-    except ValueError:
-        raise ValueError(f"bad index list '{sel}' in spec '{spec}'") from None
-
-
-_PICK_KEYS = ("surface", "node", "nuclide", "path", "part", "pv", "pvpath")
-
-
-def _picked(v: VolumeEntry, specs: list[tuple]) -> bool:
-    applicable = [s for s in specs if s[0].search(v.name)]
-    if not applicable:
-        return True          # volumes not named by any spec are untouched
-    m = v.meta
-    for _, indices, match in applicable:
-        if indices is not None:
-            if v.kind != "radio":
-                raise ValueError(
-                    f"index selector matches {v.kind} volume '{v.name}'; "
-                    f"geometry volumes are picked by path (NAME_RE#@REGEX)")
-            if m.get("index") in indices:
-                return True
-        if match is not None:
-            if v.kind != "radio" and "path" not in m:
-                raise ValueError(
-                    f"{v.kind} volume '{v.name}' has no placement path; "
-                    f"re-run bki-extract to pick geometry volumes")
-            if any(match.search(str(m[k])) for k in _PICK_KEYS
-                   if m.get(k) is not None):
-                return True
-    return False
-
-
-_LABEL_RE = re.compile(r"^([^=#\\()\[\]{}^$|*+?.]+)=(.+)$")
-
-
-def parse_highlight_spec(spec: str) -> tuple:
-    """
-    Parse a ``--highlight`` spec ``[LABEL=]NAME_RE[#SEL]``.
-
-    ``SEL`` is as in :func:`parse_pick_spec`; without it every placement of
-    the matching volumes is highlighted.  ``LABEL`` (no regex characters)
-    names the group in the legend; it defaults to the spec itself.
-
-    Returns (label, name_re, indices | None, match_re | None).
-    """
-    m = _LABEL_RE.match(spec)
-    label, body = (m.group(1).strip(), m.group(2)) if m else (spec, spec)
-    if "#" in body:
-        return (label,) + parse_pick_spec(body)
-    if not body:
-        raise ValueError(f"bad highlight spec '{spec}' (expected [LABEL=]NAME_RE[#SEL])")
-    return label, re.compile(body), None, None
-
-
-def match_highlight(v: VolumeEntry, specs: list[tuple]) -> int | None:
-    """Index of the first highlight spec matching `v`, or None.
-
-    Unlike :func:`_picked`, a volume not named by any spec is *not* matched."""
-    m = v.meta
-    for k, (_, name_re, indices, match) in enumerate(specs):
-        if not name_re.search(v.name):
-            continue
-        if indices is None and match is None:
-            return k
-        if indices is not None:
-            if v.kind != "radio":
-                raise ValueError(
-                    f"index selector matches {v.kind} volume '{v.name}'; "
-                    f"geometry volumes are highlighted by path (NAME_RE#@REGEX)")
-            if m.get("index") in indices:
-                return k
-        if match is not None and any(match.search(str(m[key])) for key in _PICK_KEYS
-                                     if m.get(key) is not None):
-            return k
-    return None
-
-
-def highlight_groups(vols: list[VolumeEntry], highlight: list[str]) -> tuple:
-    """Split `vols` by highlight specs.
-
-    Returns (labels, groups, context): one volume list per spec, in spec
-    order, and the volumes no spec matches."""
-    specs  = [parse_highlight_spec(h) for h in highlight]
-    groups: list[list[VolumeEntry]] = [[] for _ in specs]
-    context: list[VolumeEntry] = []
-    for v in vols:
-        k = match_highlight(v, specs)
-        (context if k is None else groups[k]).append(v)
-    return [sp[0] for sp in specs], groups, context
-
-
-def select_volumes(
-    ir: IRCollection,
-    kinds: list[str] | None = None,
-    name_patterns: list[str] | None = None,
-    kind_patterns: dict[str, list[str]] | None = None,
-    surfaces: list[str] | None = None,
-    picks: list[str] | None = None,
-) -> list[VolumeEntry]:
-    """
-    Apply the bki-plot selectors to ``ir.volumes`` (see :func:`plot_ir`).
-    Raises ValueError when a pick spec cannot be applied to a volume.
-    """
-
-    vols = ir.volumes
-    if kinds is not None:
-        kind_set = set(kinds)
-        vols = [v for v in vols if v.kind in kind_set]
-    if name_patterns:
-        pats = [re.compile(p) for p in name_patterns]
-        vols = [v for v in vols if any(p.search(v.name) for p in pats)]
-    if kind_patterns:
-        compiled = {k: [re.compile(p) for p in ps]
-                    for k, ps in kind_patterns.items()}
-        vols = [v for v in vols
-                if v.kind not in compiled
-                or any(p.search(v.name) for p in compiled[v.kind])]
-    if surfaces:
-        specs = [parse_pick_spec(s) for s in surfaces]
-        vols = [v for v in vols if v.kind != "radio" or _picked(v, specs)]
-    if picks:
-        specs = [parse_pick_spec(s) for s in picks]
-        vols = [v for v in vols if _picked(v, specs)]
-    return vols
-
 
 def _world_bounds(vols: list[VolumeEntry], pad_frac: float = 0.03) -> tuple:
     """
@@ -256,8 +64,9 @@ def _world_bounds(vols: list[VolumeEntry], pad_frac: float = 0.03) -> tuple:
     """
     if not vols:
         return None, None
-    arr = np.vstack([box_corners_world(v.pos, v.ext, v.rot) for v in vols])
-    lo, hi = arr.min(axis=0), arr.max(axis=0)
+    boxes = [aabb(v.pos, v.ext, v.rot) for v in vols]
+    lo = np.min([b[0] for b in boxes], axis=0)
+    hi = np.max([b[1] for b in boxes], axis=0)
     pad = pad_frac * np.maximum(hi - lo, 1.0)
     return lo - pad, hi + pad
 
@@ -294,7 +103,7 @@ def plot_ir(
     proportional: bool = True,
     orientation: str = "hd",
     highlight: list[str] | None = None,
-    dim: float = _DIM_DEFAULT,
+    dim: float = DIM_DEFAULT,
     zoom_highlight: bool = False,
 ) -> None:
     """
@@ -355,13 +164,7 @@ def plot_ir(
     layout = _LAYOUTS[orientation]
     o3     = layout["order3d"]
 
-    try:
-        import matplotlib
-    except ImportError as exc:
-        raise ImportError("plotting needs matplotlib: "
-                          "pip install matplotlib") from exc
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    plt = import_mpl()
     from matplotlib.patches import Polygon as MplPolygon
     from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
@@ -427,10 +230,10 @@ def plot_ir(
                     pmin, pmax = poly.min(axis=0), poly.max(axis=0)
                     w, h = pmax - pmin
                     mid = (pmin + pmax) / 2
-                    if w < _THIN_FRAC * (hi[ah] - lo[ah]):
+                    if w < THIN_FRAC * (hi[ah] - lo[ah]):
                         lines.append([(mid[0], pmin[1]), (mid[0], pmax[1])])
                         continue
-                    if h < _THIN_FRAC * (hi[av] - lo[av]):
+                    if h < THIN_FRAC * (hi[av] - lo[av]):
                         lines.append([(pmin[0], mid[1]), (pmax[0], mid[1])])
                         continue
                 polys.append(poly)
@@ -443,12 +246,12 @@ def plot_ir(
             ax2d.plot([], [], color=col, label=label, linewidth=3)
 
     if highlight:
-        _draw_batch(vols, _CONTEXT_COL, f"other ({_n_placements(vols)})",
+        _draw_batch(vols, CONTEXT_COL, f"other ({_n_placements(vols)})",
                     dim, min(1.0, 5 * dim), 0.2, zorder=1)
         for k, (lbl, g) in enumerate(zip(hl_labels, hl_groups)):
-            _draw_batch(g, _SURFACE_PALETTE[k % len(_SURFACE_PALETTE)],
+            _draw_batch(g, SURFACE_PALETTE[k % len(SURFACE_PALETTE)],
                         f"{lbl} ({_n_placements(g)})",
-                        _HL_FACE_ALPHA, 1.0, _HL_LINEWIDTH, zorder=10 + k,
+                        HL_FACE_ALPHA, 1.0, HL_LINEWIDTH, zorder=10 + k,
                         thin_as_lines=True)
         anodes = opdets = cathodes = fshapers = structs = radios = []
 
@@ -467,13 +270,13 @@ def plot_ir(
             s_poly_groups[v.name][ax2d].append(project_polygon(corners, ah, av))
 
     for vname, faces in s_face_groups.items():
-        col, alpha = _STRUCT_PALETTE.get(vname, _STRUCT_DEFAULT)
+        col, alpha = STRUCT_PALETTE.get(vname, STRUCT_DEFAULT)
         ax3.add_collection3d(Poly3DCollection(
             faces, alpha=alpha, facecolor=col, edgecolor=col, linewidth=0.3))
         ax3.plot([], [], [], color=col, label=vname, linewidth=3)
 
     for vname, ax_polys in s_poly_groups.items():
-        col, alpha = _STRUCT_PALETTE.get(vname, _STRUCT_DEFAULT)
+        col, alpha = STRUCT_PALETTE.get(vname, STRUCT_DEFAULT)
         for ax2d, polys in ax_polys.items():
             for k, poly2d in enumerate(polys):
                 ax2d.add_patch(MplPolygon(poly2d, closed=True,
@@ -491,7 +294,7 @@ def plot_ir(
             faces_3d  = [[[corners[j][o3[0]], corners[j][o3[1]], corners[j][o3[2]]]
                            for j in fi] for fi in BOX_FACES]
             ax3.add_collection3d(Poly3DCollection(
-                faces_3d, alpha=_FACE_ALPHA,
+                faces_3d, alpha=FACE_ALPHA,
                 facecolor=col, edgecolor=col, linewidth=0.4))
             if i == 0:
                 ax3.plot([], [], [], color=col, label=lbl, linewidth=3)
@@ -499,17 +302,17 @@ def plot_ir(
                 poly2d = project_polygon(corners, ah, av)
                 ax2d.add_patch(MplPolygon(poly2d, closed=True,
                                           facecolor=col, edgecolor=col,
-                                          alpha=_FACE_ALPHA, linewidth=0.4,
+                                          alpha=FACE_ALPHA, linewidth=0.4,
                                           label=lbl, zorder=zorder3d))
                 lbl = "_"
 
-    _draw_boxes(anodes, _ANODE_COL, "Anodes",    zorder3d=3)
-    _draw_boxes(cathodes, _CATHODE_COL, "Cathodes", zorder3d=3)
+    _draw_boxes(anodes, ANODE_COL, "Anodes",    zorder3d=3)
+    _draw_boxes(cathodes, CATHODE_COL, "Cathodes", zorder3d=3)
     # one ring = several boxes: count placements, not boxes
-    _draw_boxes(fshapers, _FSHAPER_COL,
+    _draw_boxes(fshapers, FSHAPER_COL,
                 f"Field shapers ({_n_placements(fshapers)})", zorder3d=2,
                 show_count=False)
-    _draw_boxes(opdets, _OPDET_COL, "Opt. det.", zorder3d=4)
+    _draw_boxes(opdets, OPDET_COL, "Opt. det.", zorder3d=4)
     picked_radio = picks and any(parse_pick_spec(s)[0].search(v.name)
                                  for s in picks for v in radios)
     if (surfaces or picked_radio) and radios:
@@ -518,16 +321,16 @@ def plot_ir(
         groups: dict[str, list[VolumeEntry]] = defaultdict(list)
         for v in radios:
             groups[_surface_tag(v)].append(v)
-        if len(groups) > _MAX_SURFACE_GROUPS:
+        if len(groups) > MAX_SURFACE_GROUPS:
             groups = defaultdict(list)
             for v in radios:
                 groups[v.name].append(v)
         per_surface = all(len(g) == 1 for g in groups.values())
         for k, (lbl, gvols) in enumerate(groups.items()):
-            _draw_boxes(gvols, _SURFACE_PALETTE[k % len(_SURFACE_PALETTE)],
+            _draw_boxes(gvols, SURFACE_PALETTE[k % len(SURFACE_PALETTE)],
                         lbl, zorder3d=2, show_count=not per_surface)
     else:
-        _draw_boxes(radios, _RADIO_COL, "Radio vol.", zorder3d=2)
+        _draw_boxes(radios, RADIO_COL, "Radio vol.", zorder3d=2)
 
     if lo is not None:
         span = hi - lo
@@ -627,8 +430,7 @@ def _print_list_detail(volumes: list, marks: dict | None = None) -> None:
           f"  {'z_min':>10}  {'z_max':>10}  cm  path")
     print("-" * 167)
     for idx, v in enumerate(volumes):
-        corners = box_corners_world(v.pos, v.ext, v.rot)
-        lo, hi  = corners.min(axis=0), corners.max(axis=0)
+        lo, hi = aabb(v.pos, v.ext, v.rot)
         print(f"{idx:5d} {_hl_mark(v, marks):>3}  {v.kind:<11}  {_surface_tag(v):<44}"
               f"  {v.meta.get('surface', v.meta.get('part', '')):<22}"
               f"  {lo[0]:10.3f}  {hi[0]:10.3f}"
@@ -717,8 +519,8 @@ def main() -> None:
                            "one colour and legend entry per spec, and the rest as "
                            "grey context.  SEL as for --pick (optional; @REGEX "
                            "also matches the physvol name pv and pvpath)")
-    hgrp.add_argument("--dim", type=float, default=_DIM_DEFAULT, metavar="F",
-                      help=f"face opacity of the context volumes (default: {_DIM_DEFAULT})")
+    hgrp.add_argument("--dim", type=float, default=DIM_DEFAULT, metavar="F",
+                      help=f"face opacity of the context volumes (default: {DIM_DEFAULT})")
     hgrp.add_argument("--zoom-highlight", action="store_true",
                       help="fit the axes to the highlighted volumes")
     args = ap.parse_args()
@@ -766,17 +568,9 @@ def main() -> None:
         if flag:
             kind_patterns[kind] = flag
 
-    for opt, specs, parse in (("--surface", args.surface, parse_pick_spec),
-                              ("--pick", args.pick, parse_pick_spec),
-                              ("--highlight", args.highlight, parse_highlight_spec)):
-        for spec in specs or ():
-            try:
-                parse(spec)
-            except (ValueError, re.error) as exc:
-                sys.exit(f"[error] {opt}: {exc}")
-
     # same filters for the listings and the plot
     try:
+        validate_picks(surface=args.surface, pick=args.pick, highlight=args.highlight)
         vols = select_volumes(ir, kinds=kinds, name_patterns=args.name,
                               kind_patterns=kind_patterns or None,
                               surfaces=args.surface, picks=args.pick)

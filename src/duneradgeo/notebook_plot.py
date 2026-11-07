@@ -11,21 +11,17 @@ from typing import Any
 
 import numpy as np
 
-from ._draw import BOX_EDGES, BOX_FACES, box_corners_world
+from ._draw import BOX_EDGES, BOX_FACES, box_corners_world, project_polygon
+from ._select import highlight_groups
+from ._style import CONTEXT_COL, DIM_DEFAULT, HL_FACE_ALPHA, KIND_COLOUR, SURFACE_PALETTE
 from .ir import IRCollection
 
 # ---------------------------------------------------------------------------
 # Colour maps
 # ---------------------------------------------------------------------------
 
-_KIND_COLOUR: dict[str, str] = {
-    "anode":  "royalblue",
-    "opdet":  "darkorange",
-    "cathode": "teal",
-    "fieldshaper": "slategray",
-    "struct": "mediumseagreen",
-    "radio":  "crimson",
-}
+# bki-plot's kind colours; struct volumes, coloured per name there, get one colour
+_KIND_COLOUR: dict[str, str] = dict(KIND_COLOUR, struct="mediumseagreen")
 _KIND_OPACITY: dict[str, float] = {
     "anode":  0.25,
     "opdet":  0.20,
@@ -110,7 +106,6 @@ def _box_proj_trace(center: np.ndarray, extents: np.ndarray, rot: np.ndarray,
                     name: str, legendgroup: str, showlegend: bool) -> Any:
     """Return a go.Scatter (filled polygon) for one box projected onto a 2D plane."""
     import plotly.graph_objects as go
-    from ._draw import project_polygon
 
     pts   = project_polygon(box_corners_world(center, extents, rot), ax_h, ax_v)
     xs    = list(pts[:, 0]) + [pts[0, 0]]
@@ -133,7 +128,7 @@ def _box_proj_trace(center: np.ndarray, extents: np.ndarray, rot: np.ndarray,
 # ---------------------------------------------------------------------------
 
 def make_figure(ir: IRCollection, height: int = 900,
-                highlight: list[str] | None = None, dim: float = 0.02) -> Any:
+                highlight: list[str] | None = None, dim: float = DIM_DEFAULT) -> Any:
     """
     Build an interactive Plotly figure with:
       - sub-plot (1,1)  →  3D view  (z=beam, x=drift, y=vert)
@@ -169,14 +164,13 @@ def make_figure(ir: IRCollection, height: int = 900,
     styles: dict[int, tuple] = {}
     if highlight:
         from matplotlib.colors import to_hex   # plotly has no "tab:" colours
-        from .plot import _CONTEXT_COL, _HL_FACE_ALPHA, _SURFACE_PALETTE, highlight_groups
         labels, groups, context = highlight_groups(ir.volumes, highlight)
         for v in context:
-            styles[id(v)] = (_CONTEXT_COL, dim, "other")
+            styles[id(v)] = (CONTEXT_COL, dim, "other")
         for k, (lbl, g) in enumerate(zip(labels, groups)):
-            col = to_hex(_SURFACE_PALETTE[k % len(_SURFACE_PALETTE)])
+            col = to_hex(SURFACE_PALETTE[k % len(SURFACE_PALETTE)])
             for v in g:
-                styles[id(v)] = (col, _HL_FACE_ALPHA, lbl)
+                styles[id(v)] = (col, HL_FACE_ALPHA, lbl)
         # highlights last, so they are drawn on top
         order = context + [v for g in groups for v in g]
     else:
