@@ -9,7 +9,7 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _runner import run_tests, xfail  # noqa: E402
+from _runner import run_tests  # noqa: E402
 
 from duneradgeo.distrib import formula_lines, raw_formula_lines  # noqa: E402
 
@@ -96,17 +96,12 @@ def test_raw_width_bound():
     assert len(raw_formula_lines(NEST, width=40)) > len(NEST) // 40
 
 
-@xfail("the closing quote is appended after the line was filled, so a last "
-       "line holding exactly `width - len(lead)` formula characters is "
-       "width + 1 wide (e.g. POLY at width 120: 121)")
 def test_raw_width_bound_closing_quote():
     for f, width in ((POLY, 120), ("1" * 74, 86), ("2" * 148, 86)):
         lines = raw_formula_lines(f, width=width)
         assert max(map(len, lines)) <= width, (width, [len(s) for s in lines])
 
 
-@xfail("_terms removes every space, so a formula written with spaces is not "
-       "shown 'exactly as in the FHiCL' (the docstring's promise)")
 def test_raw_round_trip_spaces():
     f = "TMath::Gaus(x, 100, 1) + 2 * x"
     assert "".join(unwrap(raw_formula_lines(f))) == f
@@ -166,8 +161,6 @@ def test_formula_lines_signs():
     assert len(formula_lines(SIGNS)) == 4
 
 
-@xfail("the parentheses around a subtracted sum are dropped: '1-(x-2)' is "
-       "shown as '- x-2', i.e. 1 - x - 2")
 def test_formula_lines_subtracted_sum():
     assert formula_lines("1-(x-2)") == ["f(x) = 1", "       - (x-2)"]
     assert formula_lines("-(x+1)") == ["f(x) = -(x+1)"]
