@@ -127,8 +127,6 @@ def parse_pick_spec(spec: str) -> tuple:
         raise ValueError(f"bad index list '{sel}' in spec '{spec}'") from None
 
 
-parse_surface_spec = parse_pick_spec
-
 _PICK_KEYS = ("surface", "node", "nuclide", "path", "part", "pv", "pvpath")
 
 
@@ -361,7 +359,7 @@ def plot_ir(
         import matplotlib
     except ImportError as exc:
         raise ImportError("plotting needs matplotlib: "
-                          "pip install 'duneradgeo[plot]'") from exc
+                          "pip install matplotlib") from exc
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.patches import Polygon as MplPolygon
@@ -589,7 +587,6 @@ def _print_list(volumes: list, marks: dict | None = None) -> None:
 
     `marks` maps id(volume) → highlight spec index; highlighted placements
     are counted per name and radio surfaces are flagged *k."""
-    from collections import Counter
     names_by_kind: dict[str, list[str]] = {}
     for v in volumes:
         names_by_kind.setdefault(v.kind, [])
@@ -623,7 +620,6 @@ def _print_list_detail(volumes: list, marks: dict | None = None) -> None:
     (column hl: *k when highlighted by spec k).  The path column is the
     physvol-name path (meta.pvpath) when the GDML names its physvols, else
     the logical-volume path (meta.path)."""
-    from ._draw import box_corners_world
     # header
     print(f"{'#':>5} {'hl':>3}  {'kind':<11}  {'name':<44}  {'surface':<22}"
           f"  {'x_min':>10}  {'x_max':>10}"

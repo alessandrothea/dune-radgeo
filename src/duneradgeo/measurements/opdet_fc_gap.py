@@ -31,7 +31,7 @@ def opdet_fc_gap(ir: IRCollection) -> Result:
         return res
 
     # 1. Field-cage boxes.  Each field-shaper ring is stored as one box per
-    #    tube / corner piece (8 or 12 per ring); collect their world-frame
+    #    tube / corner piece (8 or 12 per ring); collect their IR-frame
     #    (lo, hi) corners into arrays so distances can be vectorised.
     fboxes   = [aabb(v) for v in fshapers]
     flo, fhi = np.array([b[0] for b in fboxes]), np.array([b[1] for b in fboxes])

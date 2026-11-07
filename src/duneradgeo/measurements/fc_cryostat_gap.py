@@ -39,7 +39,7 @@ def fc_cryostat_gap(ir: IRCollection) -> Result:
         return res
 
     # 1. Boxes.  Field-shaper pieces (one box per tube / corner of each
-    #    ring) as (N, 3) arrays of world-frame corners, and the cryostat:
+    #    ring) as (N, 3) arrays of IR-frame corners, and the cryostat:
     #    the volCryostat box, whose faces are the inner cryostat walls.
     fboxes   = [aabb(v) for v in fshapers]
     flo, fhi = np.array([b[0] for b in fboxes]), np.array([b[1] for b in fboxes])

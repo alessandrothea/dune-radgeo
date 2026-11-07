@@ -3,17 +3,16 @@ Plotly-based interactive plotting for Jupyter notebooks.
 
 Public API:
   make_figure(ir)          → plotly Figure with 3D + 3×2D sub-plots
-  add_box_trace(fig, ...)  → add one box to an existing figure
 """
 from __future__ import annotations
 
-from itertools import product as _product
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 from ._draw import BOX_EDGES, BOX_FACES, box_corners_world
-from .ir import IRCollection, VolumeEntry
+from .ir import IRCollection
 
 # ---------------------------------------------------------------------------
 # Colour maps
@@ -148,7 +147,6 @@ def make_figure(ir: IRCollection, height: int = 900,
     --highlight) the matching volumes get one colour and legend group per
     spec and all others are drawn in grey with opacity ``dim``.
     """
-    import plotly.graph_objects as go
     from plotly.subplots import make_subplots
 
     fig = make_subplots(
@@ -203,7 +201,7 @@ def make_figure(ir: IRCollection, height: int = 900,
         fig.add_trace(_box_line_trace(v.pos, v.ext, v.rot, col, group),
                       row=1, col=1)
 
-        # 2D projections: (ax_h, ax_v, row, col, xlabel, ylabel)
+        # 2D projections: (ax_h, ax_v, row, col)
         proj_specs = [
             (2, 1, 1, 2),  # Z–Y
             (2, 0, 2, 1),  # Z–X
@@ -245,7 +243,3 @@ def make_figure(ir: IRCollection, height: int = 900,
         margin=dict(t=60, b=20, l=20, r=20),
     )
     return fig
-
-
-# ---- helper import so notebook_plot works without a separate import ----
-from pathlib import Path

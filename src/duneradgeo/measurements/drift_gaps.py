@@ -40,7 +40,7 @@ def drift_gaps(ir: IRCollection) -> Result:
         res.summary.append(f"no {' or '.join(missing)} volumes in the IR")
         return res
 
-    # 1. World-frame boxes.  Every IR entry is a (possibly rotated) box;
+    # 1. IR-frame boxes.  Every IR entry is a (possibly rotated) box;
     #    aabb() turns it into axis-aligned (lo, hi) corners so faces along
     #    x can be compared directly.  The cathode is the outer box of the
     #    perforated CathodeGrid solid, i.e. its full thickness (~4 cm).

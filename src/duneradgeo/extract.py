@@ -48,8 +48,8 @@ from pathlib import Path
 import numpy as np
 
 from ._draw import box_corners_world
-from ._fcl import (FhiclParser, default_fcl_cache_dir, expand_fcl,
-                   producer_volumes, select_producers)
+from ._fcl import (DEFAULT_CONTAINMENT, FhiclParser, default_fcl_cache_dir,
+                   expand_fcl, producer_volumes, select_producers)
 from ._gdml import BACKENDS, GeometryBase, load_geometry
 from ._tf1 import GENERATOR_NPX, ROOTUnavailable
 from ._profiles import detect_profile, get_profile, profile_detector
@@ -187,8 +187,8 @@ def _fcl_radio_volumes(doc: dict,
                        prefix: str = "",
                        all_configured: bool = False,
                        select_re: str | None = None,
-                       containment: float = 0.99,
-                       npx: int = 100) -> tuple[list[VolumeEntry], dict]:
+                       containment: float = DEFAULT_CONTAINMENT,
+                       npx: int = GENERATOR_NPX) -> tuple[list[VolumeEntry], dict]:
     """Build radio VolumeEntry rows from an already-parsed FCL document.
 
     Returns (entries, producers): the rows, and the full FHiCL table of every
@@ -280,9 +280,9 @@ def main() -> None:
                     help="regex filter on producer labels")
     ap.add_argument("--all-configured", action="store_true",
                     help="include producers not on any trigger path")
-    ap.add_argument("--containment",    type=float, default=0.99,
+    ap.add_argument("--containment",    type=float, default=DEFAULT_CONTAINMENT,
                     help="distrib_x/y/z containment fraction for the effective "
-                         "range (default 0.99)")
+                         "range (default %(default)s)")
     ap.add_argument("--npx",            type=int, default=GENERATOR_NPX,
                     help="TF1 Npx of the generator: the effective range is that of "
                          "the distribution TF1::GetRandom draws from an Npx-point "

@@ -91,6 +91,10 @@ class GeometryBase:
         Return (name, world_pos, world_rot) for every placement of volumes
         whose name matches any pattern in vol_patterns.
 
+        A backward BFS from the matching volumes collects every volume that
+        can contain one; a DFS from the world volume then composes the
+        placements, pruning subtrees outside that set.
+
         With ``with_path`` each tuple also carries the placement path below
         the world volume, ``volA:0/volB:3/name:1``, where ``:k`` counts the
         placements of that volume within its parent in GDML order.  It does
@@ -222,15 +226,10 @@ class GeometryBase:
 
 class GDMLGeometry(GeometryBase):
     """
-    Parse a DUNE GDML file and locate world-frame positions of named volumes.
-
-    Algorithm:
-      1. BFS backward from target volumes to build `can_contain` ancestor set.
-      2. DFS from the world volume, composing translations and rotations, pruning
-         any subtree whose root is not in `can_contain`.
-    (both in :meth:`GeometryBase.find_positions`)
-
-    Full FD 1×8×14 geometry runs in ~1 s with this approach.
+    GDML geometry read in pure Python (``xml.etree``): fills the
+    :class:`GeometryBase` tables from the define, solids, structure and
+    setup sections; the search is :meth:`GeometryBase.find_positions`.
+    The full FD 1×8×14 geometry loads and searches in about 1 s.
     """
 
     backend = "python"

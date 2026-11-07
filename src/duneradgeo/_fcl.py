@@ -1,4 +1,7 @@
-"""FHiCL parser and radiological-volume extractor (no PyROOT required)."""
+"""FHiCL parser and radiological-volume extractor.
+
+The parser needs no PyROOT; the distrib_x/y/z effective ranges are evaluated
+by ROOT (see _tf1, which imports ROOT only when a formula is evaluated)."""
 from __future__ import annotations
 
 import copy
@@ -8,6 +11,8 @@ import re
 import sys
 
 import numpy as np
+
+from . import _tf1
 
 # ---------------------------------------------------------------------------
 # #include preprocessor
@@ -107,7 +112,7 @@ def _expand_fcl_uncached(path: str, text: str, bname: str, search_var: str) -> s
                 ["fhicl-dump", path],
                 capture_output=True, text=True, check=True,
             )
-            print(f"[info] expansion done", file=sys.stderr)
+            print("[info] expansion done", file=sys.stderr)
             return result.stdout
         except subprocess.CalledProcessError as exc:
             print(f"[warn] fhicl-dump failed ({exc}); falling back to inline resolver",
@@ -116,7 +121,7 @@ def _expand_fcl_uncached(path: str, text: str, bname: str, search_var: str) -> s
     # -- inline fallback -----------------------------------------------------
     print(f"[info] expanding '{bname}' via ${search_var} …", file=sys.stderr)
     expanded = _preprocess_fcl(text, search_var=search_var)
-    print(f"[info] expansion done", file=sys.stderr)
+    print("[info] expansion done", file=sys.stderr)
     return expanded
 
 
@@ -241,11 +246,6 @@ class FhiclParser:
         self.i += 1
         return t
 
-    def _expect(self, val: str):
-        k, v = self._next()
-        if v != val:
-            raise SyntaxError(f"expected {val!r}, got {v!r}")
-
     def parse(self) -> dict:
         while self.peek()[0] is not None:
             k, v = self.peek()
@@ -318,7 +318,6 @@ def x_interval(formula: str, x0: float, x1: float,
     """Shortest [a,b] ⊂ [x0,x1] holding `containment` of the distribution:
     the one GetRandom produces with `npx` points, or the formula pdf when
     `npx` is None.  Needs PyROOT (raises _tf1.ROOTUnavailable)."""
-    from . import _tf1
     if npx is None:
         return _tf1.formula_interval(formula, x0, x1, containment)
     return _tf1.generated_interval(formula, x0, x1, containment, npx)
@@ -376,6 +375,7 @@ def _world_aabb_per_hit(geo, patterns: list[str]) -> list[tuple]:
 
 BOX_KEYS = ("X0", "X1", "Y0", "Y1", "Z0", "Z1")
 DISTRIB_AXES = ("x", "y", "z")
+DEFAULT_CONTAINMENT = 0.99   # fraction of a distrib_<ax> held by its effective range
 RADIO_MODULES = ("RadioGen", "Decay0Gen")
 
 
@@ -397,8 +397,8 @@ def _surface_label(lo: list, hi: list) -> str:
 
 
 def producer_volumes(name: str, cfg: dict, geo=None,
-                     xrange=None, containment: float = 0.99,
-                     npx: int = 100) -> list[dict]:
+                     containment: float = DEFAULT_CONTAINMENT,
+                     npx: int = _tf1.GENERATOR_NPX) -> list[dict]:
     """
     Extract emission volume rows from a single RadioGen/Decay0Gen config dict.
 
@@ -449,9 +449,6 @@ def producer_volumes(name: str, cfg: dict, geo=None,
             else:
                 print(f"[warn] {name}: volume_rand '{vr}' not found in geometry",
                       file=sys.stderr)
-        elif xrange:
-            lo = [xrange[0], None, None]
-            hi = [xrange[1], None, None]
         rows.append(dict(base, index=0, source=f"volume_rand:{vr}", lo=lo, hi=hi))
     else:
         vg = cfg.get("volume_gen", ".*")

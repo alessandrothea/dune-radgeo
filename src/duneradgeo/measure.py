@@ -7,7 +7,7 @@ Usage:
   bki-measure detector.json --json out.json    # also write the results as JSON
   bki-measure --list                           # available measurements
 
-Lengths are in cm, in the world frame (x = drift, z = beam).
+Lengths are in cm, in the IR frame (x = drift, z = beam).
 
 The measurements live in the duneradgeo.measurements package, one module
 each; adding a module there adds a measurement (see its docstring).

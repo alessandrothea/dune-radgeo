@@ -59,7 +59,7 @@ def run(ir: IRCollection, names: list[str] | None = None) -> list[Result]:
 # ---------------------------------------------------------------------------
 
 def aabb(v: VolumeEntry) -> tuple[np.ndarray, np.ndarray]:
-    """World-frame (lo, hi) corners of a volume's box."""
+    """IR-frame (lo, hi) corners of a volume's box."""
     corners = box_corners_world(v.pos, v.ext, v.rot)
     return corners.min(axis=0), corners.max(axis=0)
 
@@ -83,7 +83,7 @@ def overlap_area(lo1, hi1, lo2, hi2, axes: tuple[int, int]) -> float:
 
 
 def struct_box(ir: IRCollection, pattern: str) -> tuple | None:
-    """World-frame (lo, hi) enclosing every struct volume whose name matches
+    """IR-frame (lo, hi) enclosing every struct volume whose name matches
     `pattern` (re.search), or None if there is none (e.g. r"^volCryostat$")."""
     boxes = [aabb(v) for v in ir.by_kind("struct") if re.search(pattern, v.name)]
     if not boxes:
