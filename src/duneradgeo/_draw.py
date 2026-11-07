@@ -29,7 +29,8 @@ BOX_EDGES = [
 
 def box_corners_world(center: np.ndarray, extents: np.ndarray,
                       rot: np.ndarray) -> np.ndarray:
-    """(8,3) world-frame corners of a box."""
+    """(8,3) corners of a box centred at `center` with rotation `rot`, in the
+    frame of `center` and `rot`."""
     local = BOX_CORNERS * (extents / 2)
     return (rot @ local.T).T + center
 
