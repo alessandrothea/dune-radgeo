@@ -34,6 +34,14 @@ def box_corners_world(center: np.ndarray, extents: np.ndarray,
     return (rot @ local.T).T + center
 
 
+def aabb(pos: np.ndarray, ext: np.ndarray,
+         rot: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """(lo, hi) of the axis-aligned box enclosing a rotated box: the
+    min/max of its 8 corners, in the frame of `pos` and `rot`."""
+    corners = box_corners_world(pos, ext, rot)
+    return corners.min(axis=0), corners.max(axis=0)
+
+
 def project_polygon(corners_world: np.ndarray, ax_h: int, ax_v: int) -> np.ndarray:
     """Project 8 corners onto a 2D plane; return CCW convex-hull vertices."""
     pts = corners_world[:, [ax_h, ax_v]]

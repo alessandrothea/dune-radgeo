@@ -7,7 +7,7 @@ from typing import Callable
 
 import numpy as np
 
-from .._draw import box_corners_world
+from .._draw import aabb as _box_aabb
 from ..ir import IRCollection, VolumeEntry
 
 X  = 0          # drift axis
@@ -60,8 +60,7 @@ def run(ir: IRCollection, names: list[str] | None = None) -> list[Result]:
 
 def aabb(v: VolumeEntry) -> tuple[np.ndarray, np.ndarray]:
     """IR-frame (lo, hi) corners of a volume's box."""
-    corners = box_corners_world(v.pos, v.ext, v.rot)
-    return corners.min(axis=0), corners.max(axis=0)
+    return _box_aabb(v.pos, v.ext, v.rot)
 
 
 def tags(vols: list[VolumeEntry]) -> list[str]:
