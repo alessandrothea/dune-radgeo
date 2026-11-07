@@ -85,8 +85,6 @@ def test_infinity():
     assert d["a"] == math.inf and d["b"] == math.inf
 
 
-@xfail("'+infinity'/'-infinity' do not tokenize (no token starts with a bare "
-       "sign), so the -infinity branch of _value is unreachable")
 def test_signed_infinity():
     # fhicl-cpp writes infinite values as +infinity / -infinity
     d = parse("a: +infinity  b: -infinity  c: [-infinity, +infinity]")
@@ -473,8 +471,6 @@ def test_volume_rand():
     assert "[warn]" in err and "volNone" in err, err
 
 
-@xfail("volume_rand takes the union of the boxes of every placement; "
-       "BaseRadioGen uses the first depth-first match only")
 def test_volume_rand_first_placement():
     rows, _ = volumes("p", dict(module_type="Decay0Gen", volume_rand="volBox"), geometry())
     assert same_box(rows[0], BOX_1), (rows[0]["lo"], rows[0]["hi"])
@@ -507,8 +503,6 @@ def test_volume_gen():
     assert "[warn]" in err and "nomatch" in err, err
 
 
-@xfail("volume_gen is searched (re.search), so 'volBox' also selects "
-       "volBoxInner; BaseRadioGen matches the full name (std::regex_match)")
 def test_volume_gen_full_match():
     rows, _ = volumes("p", dict(module_type="Decay0Gen", volume_gen="volBox"), geometry())
     assert [r["node"] for r in rows] == ["volBox", "volBox"]

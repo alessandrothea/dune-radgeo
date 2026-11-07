@@ -179,6 +179,7 @@ _TOKEN_RE = re.compile(r"""
   | (?P<protect>@protect_ignore:|@protect_error:)
   | (?P<erase>@erase)
   | (?P<nil>@nil)
+  | (?P<inf>[+-]infinity(?![\w.]))
   | (?P<number>[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?(?![\w.]))
   | (?P<ident>[A-Za-z_][\w]*(?:\.[A-Za-z_]\w*|\[\d+\])*)
   | (?P<punct>[{}\[\]:,])
@@ -279,14 +280,14 @@ class FhiclParser:
         if k == "erase":   return ERASE
         if k == "nil":     return None
         if k == "number":  return float(v)
+        if k == "inf":     return -math.inf if v[0] == "-" else math.inf
         if k == "string":
             return (bytes(v[1:-1], "utf-8").decode("unicode_escape")
                     if v[0] == '"' else v[1:-1])
         if k == "ident":
             low = v.lower()
             if low in ("true", "false"):    return low == "true"
-            if low in ("infinity", "+infinity"): return math.inf
-            if low == "-infinity":           return -math.inf
+            if low == "infinity":           return math.inf
             return v
         if k == "ref":
             return _lookup(self.root, v.split("::", 1)[1])
@@ -343,17 +344,25 @@ def _placed(geo, patterns: list[str]) -> bool:
     return next(iter(geo.find_positions(patterns)), None) is not None
 
 
-def _world_aabb(geo, patterns: list[str], label: str = "") -> tuple | None:
+def _first_world_aabb(geo, patterns: list[str], label: str = "") -> tuple | None:
     """
-    World-frame axis-aligned box (lo, hi) enclosing every placement of the
-    volumes matching `patterns` (the union of :func:`_world_aabb_per_hit`).
-    Returns None if nothing is found.
+    World-frame axis-aligned box (lo, hi) of the first placement, in
+    depth-first order from the world volume (GDML daughter order), of the
+    volumes matching `patterns`: the node BaseRadioGen's findNode returns
+    for volume_rand.  None if nothing matches or that placement's solid has
+    no bounding box (warned).
     """
-    hits = _world_aabb_per_hit(geo, patterns, label)
+    hits = geo.find_positions(patterns)
     if not hits:
         return None
-    return (np.min([h[1] for h in hits], axis=0).tolist(),
-            np.max([h[2] for h in hits], axis=0).tolist())
+    vname, pos, rot = hits[0]
+    bbox = geo.volume_bbox(vname)
+    if bbox is None:
+        print(f"[warn] {label}: no bounding box for the solid of {vname} "
+              f"(unsupported shape), placement skipped", file=sys.stderr)
+        return None
+    lo, hi = _placed_aabb(bbox, pos, rot)
+    return lo.tolist(), hi.tolist()
 
 
 # ---------------------------------------------------------------------------
@@ -469,7 +478,7 @@ def producer_volumes(name: str, cfg: dict, geo=None,
         vr = cfg["volume_rand"]
         lo = hi = None
         if geo is not None:
-            bbox = _world_aabb(geo, [f"^{re.escape(vr)}$"], name)
+            bbox = _first_world_aabb(geo, [f"^{re.escape(vr)}$"], name)
             if bbox is not None:
                 lo, hi = bbox
             elif not _placed(geo, [f"^{re.escape(vr)}$"]):
@@ -479,14 +488,15 @@ def producer_volumes(name: str, cfg: dict, geo=None,
     else:
         vg = cfg.get("volume_gen", ".*")
         if geo is not None:
-            hits = _world_aabb_per_hit(geo, [vg], name)
+            # full-name match, as BaseRadioGen's std::regex_match
+            hits = _world_aabb_per_hit(geo, [f"^(?:{vg})$"], name)
             if hits:
                 for i, (vname, lo, hi) in enumerate(hits):
                     rows.append(dict(base, index=i,
                                      source=f"volume_gen:{vg}",
                                      node=vname, lo=lo, hi=hi))
             else:
-                if not _placed(geo, [vg]):
+                if not _placed(geo, [f"^(?:{vg})$"]):
                     print(f"[warn] {name}: volume_gen '{vg}' not found in geometry",
                           file=sys.stderr)
                 rows.append(dict(base, index=0, source=f"volume_gen:{vg}",

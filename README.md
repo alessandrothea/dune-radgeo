@@ -856,10 +856,12 @@ type.
   one operand (a subtraction: of its first operand; an intersection: the
   overlap of the operands' boxes).  That box is placed in the world through
   the mother chain, and the entry is the axis-aligned envelope of its 8
-  corners.  `volume_rand` gives one entry enclosing every placement of the
-  volume (`BaseRadioGen` takes the first placement it finds: one of the
-  known differences that `tests/test_fcl.py` marks as xfail); `volume_gen`
-  one entry per matching node (`meta.node`).
+  corners.  As in `BaseRadioGen`, `volume_rand` is the exact volume name
+  and gives one entry, for its first placement in depth-first order from
+  the world (GDML daughter order); `volume_gen` is a regex matched against
+  the full volume name (`volAnodePlate` does not select
+  `volAnodePlateBottom`) and gives one entry per matching node
+  (`meta.node`).
 - The ROOT backend takes ROOT's own box for every shape; the built-in
   parser computes it for boxes, tubes, tori and their booleans, and warns
   about a volume whose solid it cannot box.
@@ -1061,7 +1063,7 @@ dsw -C <area> py tests/test_tf1.py
 ```
 
 Tests marked xfail check the correct behaviour where the code is known to
-differ (e.g. `volume_gen` matched with `re.search` where `BaseRadioGen`
-uses `std::regex_match`): each documents a known issue, with the reason in
+differ (e.g. a Decay0Gen `decay_chain` ignored for an explicit X0..Z1
+box): each documents a known issue, with the reason in
 its `@xfail(...)`.  Run directly, they are skipped and listed as `xfail`;
 under pytest they run as expected failures.
