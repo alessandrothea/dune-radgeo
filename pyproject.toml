@@ -8,8 +8,9 @@ authors = [
 ]
 requires-python = ">=3.9"
 
-# Full install: bki-extract, bki-plot and the notebook.
-# bki-extract alone needs only numpy: pip install --no-deps . numpy
+# Full install: bki-extract, bki-plot, bki-measure, bki-distrib and the notebook.
+# bki-extract alone needs numpy, plus PyROOT (the root group below, or a dunesw
+# area's ROOT) for producers with distrib_x/y/z: pip install --no-deps . numpy
 dependencies = [
     "numpy",       # bki-extract, bki-plot --list / -L
     "matplotlib",  # bki-plot rendering, plot_ir
@@ -18,11 +19,16 @@ dependencies = [
     "nbconvert",
 ]
 
-# ROOT for bki-extract --gdml-backend root.  A dependency group, not a
-# package dependency: `uv sync` installs it by default (see default-groups),
-# `uv sync --no-group root` skips it, and `pip install .` never installs it,
-# so in the dunesw container the UPS ROOT is used and never shadowed.
-# The pip wheels exist for CPython 3.14 only, hence the marker.
+# PyROOT for the host venv, from the `root` pip wheel: it evaluates the
+# distrib_x/y/z TF1 formulas (bki-extract of producers with distrib_*,
+# bki-distrib, tests/test_tf1.py) and is the ROOT that --gdml-backend root
+# imports, although the current wheels (0.1a12) lack TGeo/GDML, so that
+# backend works only with a full ROOT such as a dunesw area's.
+# A dependency group, not a package dependency: `uv sync` installs it by
+# default (see default-groups), `uv sync --no-group root` skips it, and
+# `pip install .` never installs it, so a dunesw area uses its own (UPS) ROOT,
+# never shadowed by the wheel.  The marker limits the group to Python >= 3.14,
+# the host venv's Python.
 [dependency-groups]
 root = ["root>=0.1a12; python_version >= '3.14'"]
 
