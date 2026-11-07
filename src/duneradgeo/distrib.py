@@ -1,23 +1,18 @@
 """
 bki-distrib  —  draw the distrib_x/y/z position profiles stored in a JSON IR
 
-RadioGen/Decay0Gen producers with a distrib_<axis> parameter do not sample
-that coordinate uniformly.  The parameter is a TF1 formula in the variable x,
-drawn with TF1::GetRandom over the box range on that axis (larsimrad
-BaseRadioGen).  GetRandom samples from an Npx-point table (BaseRadioGen keeps
-ROOT's default, 100), so features narrower than range/Npx are not reproduced.
-Each page shows, over the full range:
-  * the formula, evaluated by ROOT (TF1::Eval);
-  * the distribution as generated, from ROOT's own GetRandom table
-    (TF1::GetQuantiles with Npx points);
-with the effective range of the generated distribution shaded (the box
-bki-extract writes, distrib_<axis>_eff_range) and that of the formula marked.
-Producers sharing a formula and range share one plot; each plot is a page of
-the PDF (other formats: one file per plot).  Needs PyROOT.  Not modelled: the
-redraw of points outside the volumes allowed by volume_gen / material (e.g.
-the gas above the liquid).
-Coordinates are world coordinates, as the generator samples them, also for
-IRs written with bki-extract --frame.
+RadioGen/Decay0Gen producers with a distrib_<axis> parameter draw that
+coordinate from a TF1 formula in x over the box range (TF1::GetRandom,
+larsimrad BaseRadioGen).  Each page shows the formula (TF1::Eval) and the
+distribution as generated, with the effective range of each marked (the
+generated one, shaded, is the box bki-extract writes).
+GetRandom samples from an Npx-point table (default 100), so features narrower
+than range/Npx are lost; see the duneradgeo._tf1 docstring.
+Producers sharing a formula and range share one plot: a page of the PDF, or
+one file per plot for other formats.  Needs PyROOT.  Not modelled: the redraw
+of points outside the volume_gen / material volumes.  Coordinates are world
+coordinates, as the generator samples them, also for IRs written with
+bki-extract --frame.
 
 Usage:
   bki-distrib detector.json                     # -> detector_distrib.pdf
@@ -25,8 +20,7 @@ Usage:
   bki-distrib detector.json --list              # text only, no matplotlib
   bki-distrib detector.json --radio 'Mesh|Cathode'
 
-Reads distrib_<axis>_range, distrib_<axis>_eff_range, distrib_<axis>_formula_eff_range,
-distrib_eff_containment and distrib_eff_npx from the IR, as written by bki-extract.
+Reads the distrib_* ranges, containment and Npx that bki-extract writes.
 """
 from __future__ import annotations
 
@@ -45,6 +39,7 @@ from ._fcl import DISTRIB_AXES, DISTRIB_COMMON, distrib_keys
 from ._root import ROOTUnavailable
 from .ir import IRCollection, VolumeEntry
 from ._select import select_volumes, validate_picks
+from ._style import import_mpl
 
 _NPTS       = 100001
 _EFF_COL    = "tab:orange"
@@ -163,19 +158,20 @@ def fractions(g: DistribGroup) -> tuple:
 # Output
 # ---------------------------------------------------------------------------
 
-def _fmt_rng(r) -> str:
-    return f"[{r[0]:.3f}, {r[1]:.3f}]"
+def _fmt_range(r, w: int = 0) -> str:
+    """'[lo, hi]' with 3 decimals, each number right-aligned in `w` characters."""
+    return f"[{r[0]:{w}.3f}, {r[1]:{w}.3f}]"
 
 
 def print_groups(groups: list[DistribGroup]) -> None:
     for i, g in enumerate(groups):
-        print(f"[{i}] {g.label()}  range {_fmt_rng(g.range_)}"
+        print(f"[{i}] {g.label()}  range {_fmt_range(g.range_)}"
               f"  containment {g.containment:g}  npx {g.npx}")
         try:
             frac_gen, frac_formula = fractions(g)
-            print(f"    eff_range (generated) {_fmt_rng(g.eff)}  (measured {frac_gen:.4f})"
+            print(f"    eff_range (generated) {_fmt_range(g.eff)}  (measured {frac_gen:.4f})"
                   + ("  [recomputed for --npx]" if g.eff_computed else ""))
-            print(f"    formula eff range     {_fmt_rng(g.formula_eff)}"
+            print(f"    formula eff range     {_fmt_range(g.formula_eff)}"
                   f"  (measured {frac_formula:.4f})")
         except ValueError as exc:
             print(f"    [cannot evaluate: {exc}]")
@@ -283,49 +279,74 @@ def _surface_text(s: str) -> str:
 
 
 # ---- page layout ----------------------------------------------------------
+# Positions are figure fractions; sizes are points (1/72 inch).
 
 _MONO   = "DejaVu Sans Mono"
 _GREY   = "0.35"
 _MAX_PRODUCERS = 16
-_TOP    = 0.875          # top of the plot and of the side panel (figure units)
+_LEFT   = 0.065          # left edge of the title, the plots and the formula text
+_RIGHT  = 0.985          # right margin: page number, side panel text
+_TOP    = 0.875          # top of the plot and of the side panel
 _AX_W   = 0.565          # plot width
+_XLABEL_H = 0.085        # room for the x label (and tick labels) under a plot
+_ZOOM_SPLIT = 0.5        # share of the plot height for the full-range plot
+_TITLE_Y, _SOURCE_Y, _FOOT_Y = 0.950, 0.915, 0.015
 _PANEL  = 0.665          # side panel left edge
-_BOX_X, _BOX_Y = 0.065, 0.04   # formula box: text left edge, box bottom
-_BOX_PAD, _BOX_GAP = 0.012, 0.012
-_CAP_SIZE    = 8.5
+_HEADING_H   = 0.035     # side panel heading, down to the text under it
+_SECTION_GAP = 0.035     # side panel: notes to the next heading
+_NOTE_GAP    = 0.012     # side panel: sampling table to the notes
+_BOX_X, _BOX_Y = _LEFT, 0.04   # formula box: text left edge, box bottom
+_BOX_PAD, _BOX_GAP = 0.012, 0.012   # inside the box: top/bottom, between blocks
+_BOX_INSET   = 0.006     # box edge to text, left and right; corner radius
+_BOX_SIZE    = 10.0      # largest formula font size
+_CAP_SIZE    = 8.5       # caption font size
+_HEADING_SIZE = 11.5
+_NOTE_SIZE   = 8
+_CHAR_W      = 0.61      # mono character width / font size
+_CAP_CHAR_W  = 0.5       # mean caption (sans) character width / font size
+_LS_MONO     = 1.45      # line spacings (× font size)
+_LS_TABLE    = 1.5
+_LS_NOTE     = 1.4
+_LS_CAP      = 1.6       # caption line plus the gap under it
 _ZOOM_FRAC   = 0.5       # zoom when the eff range is narrower than this × range
 _ZOOM_MARGIN = 0.25      # zoom window: eff range ± this × its width
 
 
+def _text_h(nlines: int, size: float, ls: float, fig) -> float:
+    """Height of `nlines` lines of `size`-point text with line spacing `ls`,
+    in figure units."""
+    return nlines * size * ls / 72 / fig.get_figheight()
+
+
 def _mono_size(lines: list[str], fig, x0: float, base: float,
-               right: float = 0.985) -> float:
+               right: float = _RIGHT) -> float:
     """Largest size <= `base` at which the longest mono line fits in [x0, right]."""
     chars = max((len(s) for s in lines), default=1)
     avail = (right - x0) * fig.get_figwidth() * 72          # points
-    return min(base, avail / (0.61 * chars))
+    return min(base, avail / (_CHAR_W * chars))
 
 
-def _plot_pdf(ax_, pr: Profile, g: DistribGroup, log: bool, legend: bool) -> None:
+def _plot_pdf(ax, pr: Profile, g: DistribGroup, log: bool, legend: bool) -> None:
     c = f"{100 * g.containment:g}%"
-    ax_.plot(pr.x, pr.formula, color=_FORMULA_COL, lw=1.4, label="formula (TF1::Eval)")
-    ax_.plot(pr.x, pr.generated, color=_CURVE_COL, lw=1.8, alpha=0.9,
-             label=f"as generated (TF1::GetRandom, Npx={g.npx})")
-    ax_.axvspan(*g.eff, color=_EFF_COL, alpha=0.22, lw=0,
-                label=f"effective range, as generated ({c})")
+    ax.plot(pr.x, pr.formula, color=_FORMULA_COL, lw=1.4, label="formula (TF1::Eval)")
+    ax.plot(pr.x, pr.generated, color=_CURVE_COL, lw=1.8, alpha=0.9,
+            label=f"as generated (TF1::GetRandom, Npx={g.npx})")
+    ax.axvspan(*g.eff, color=_EFF_COL, alpha=0.22, lw=0,
+               label=f"effective range, as generated ({c})")
     for e in g.eff:
-        ax_.axvline(e, color=_EFF_COL, lw=1.0, ls="--")
+        ax.axvline(e, color=_EFF_COL, lw=1.0, ls="--")
     for k, e in enumerate(g.formula_eff):
-        ax_.axvline(e, color=_FORMULA_COL, lw=1.0, ls=":",
-                    label=f"effective range of the formula ({c})" if k == 0 else None)
+        ax.axvline(e, color=_FORMULA_COL, lw=1.0, ls=":",
+                   label=f"effective range of the formula ({c})" if k == 0 else None)
     if log:
-        ax_.set_yscale("log")
+        ax.set_yscale("log")
     if legend:
-        ax_.legend(loc="best", fontsize=10, framealpha=0.9)
-    ax_.set_xlim(pr.x[0], pr.x[-1])
-    ax_.set_xlabel(f"{g.axis}  [cm, world]", fontsize=11)
-    ax_.set_ylabel("probability density  [1/cm]", fontsize=11)
-    ax_.tick_params(labelsize=10)
-    ax_.grid(alpha=0.3)
+        ax.legend(loc="best", fontsize=10, framealpha=0.9)
+    ax.set_xlim(pr.x[0], pr.x[-1])
+    ax.set_xlabel(f"{g.axis}  [cm, world]", fontsize=11)
+    ax.set_ylabel("probability density  [1/cm]", fontsize=11)
+    ax.tick_params(labelsize=10)
+    ax.grid(alpha=0.3)
 
 
 def zoom_window(g: DistribGroup) -> tuple | None:
@@ -339,117 +360,126 @@ def zoom_window(g: DistribGroup) -> tuple | None:
     return (max(g.range_[0], a - _ZOOM_MARGIN * w), min(g.range_[1], b + _ZOOM_MARGIN * w))
 
 
-def _draw_page(fig, g: DistribGroup, log: bool, source: str,
-               page: int, npages: int, zoom: bool = True) -> None:
-    """One distribution on `fig`: title, plot (+ zoom), formula box, side panel."""
-    # formula box: the FHiCL parameter, then the compacted version, each captioned
+def _draw_formula_box(fig, g: DistribGroup) -> float:
+    """The formula box at the bottom left: the FHiCL parameter, then the
+    compact form, each under a caption (sans, grey).  Returns its top."""
+    from matplotlib.patches import FancyBboxPatch
     raw, comp = raw_formula_lines(g.formula, g.axis), formula_lines(g.formula)
-    fsize = min(10.0, _mono_size(raw + comp, fig, _BOX_X, 10.0, right=_BOX_X + _AX_W))
-    H = fig.get_figheight()
-    mono_h = fsize * 1.45 / 72 / H                            # one mono line, fig units
-    cap_h = _CAP_SIZE * 1.6 / 72 / H                          # caption line + gap
     blocks = [("FHiCL · evaluated by ROOT", raw), ("compact form · display only", comp)]
-    box_h = (2 * _BOX_PAD + len(blocks) * cap_h + (len(raw) + len(comp)) * mono_h
+    lines = raw + comp
+    fsize = min(_BOX_SIZE, _mono_size(lines, fig, _BOX_X, _BOX_SIZE, right=_BOX_X + _AX_W))
+    mono_h = _text_h(1, fsize, _LS_MONO, fig)                # one mono line
+    cap_h = _text_h(1, _CAP_SIZE, _LS_CAP, fig)
+    box_h = (2 * _BOX_PAD + len(blocks) * cap_h + len(lines) * mono_h
              + (len(blocks) - 1) * _BOX_GAP)
     box_top = _BOX_Y + box_h
-    ax_bottom = box_top + 0.085
 
-    # ---- title ----
-    where = ", ".join(_surface_text(s) for s in g.surfaces) or "—"
-    fig.text(0.065, 0.950, f"distrib_{g.axis}   ·   {where}",
-             fontsize=15, fontweight="bold", va="baseline")
-    if source:
-        fig.text(0.065, 0.915, source, fontsize=10, color=_GREY, va="baseline")
-    fig.text(0.985, 0.015, f"{page} / {npages}", fontsize=9, color=_GREY, ha="right")
-
-    # ---- plot (+ zoom on the effective range) ----
-    try:
-        pr = profile(g)
-        frac_gen, frac_formula = fractions(g)
-        err = None
-    except ValueError as exc:
-        pr = None
-        err = exc
-    win = zoom_window(g) if (zoom and err is None) else None
-    if win is None:
-        ax_ = fig.add_axes((0.065, ax_bottom, _AX_W, _TOP - ax_bottom))
-    else:
-        h = _TOP - ax_bottom - 0.085                       # 0.085: x label of the top plot
-        h_main = 0.5 * h
-        ax_ = fig.add_axes((0.065, _TOP - h_main, _AX_W, h_main))
-        ax_z = fig.add_axes((0.065, ax_bottom, _AX_W, h - h_main))
-    if err is not None:
-        ax_.text(0.5, 0.5, f"cannot evaluate the formula:\n{err}", fontsize=11,
-                 ha="center", va="center", transform=ax_.transAxes, color="tab:red")
-        ax_.set_xlim(*g.range_)
-    else:
-        _plot_pdf(ax_, pr, g, log, legend=True)
-    if win is not None:
-        _plot_pdf(ax_z, profile(g, *win), g, log, legend=False)
-        ax_z.set_title(f"zoom: effective ranges ± {100 * _ZOOM_MARGIN:g}% of their span",
-                       fontsize=10, loc="left", color=_GREY)
-
-    # ---- formula box: captions (sans, grey) over monospace blocks ----
-    from matplotlib.patches import FancyBboxPatch
-    chars = max(len(s) for s in raw + comp)
-    width = max(chars * 0.61 * fsize, max(len(c) for c, _ in blocks) * 0.5 * _CAP_SIZE)
-    width = min(width / 72 / fig.get_figwidth(), _AX_W) + 0.012
+    width = max(max(len(s) for s in lines) * _CHAR_W * fsize,
+                max(len(c) for c, _ in blocks) * _CAP_CHAR_W * _CAP_SIZE)
+    width = min(width / 72 / fig.get_figwidth(), _AX_W) + 2 * _BOX_INSET
     fig.add_artist(FancyBboxPatch(
-        (_BOX_X - 0.006, _BOX_Y), width, box_h, transform=fig.transFigure,
-        boxstyle="round,pad=0,rounding_size=0.006", fc="0.965", ec="0.8", lw=0.8,
-        zorder=0))
+        (_BOX_X - _BOX_INSET, _BOX_Y), width, box_h, transform=fig.transFigure,
+        boxstyle=f"round,pad=0,rounding_size={_BOX_INSET}", fc="0.965", ec="0.8",
+        lw=0.8, zorder=0))
     y = box_top - _BOX_PAD
-    for k, (caption, lines) in enumerate(blocks):
+    for k, (caption, block) in enumerate(blocks):
         if k:
             y -= _BOX_GAP
         fig.text(_BOX_X, y, caption, fontsize=_CAP_SIZE, color=_GREY, style="italic",
                  va="top", ha="left")
         y -= cap_h
-        fig.text(_BOX_X, y, "\n".join(lines), family=_MONO, fontsize=fsize,
-                 va="top", ha="left", linespacing=1.45)
-        y -= len(lines) * mono_h
+        fig.text(_BOX_X, y, "\n".join(block), family=_MONO, fontsize=fsize,
+                 va="top", ha="left", linespacing=_LS_MONO)
+        y -= len(block) * mono_h
+    return box_top
 
-    # ---- side panel ----
-    def rng_txt(r):
-        return f"[{r[0]:9.3f}, {r[1]:9.3f}]"
 
-    rows = [("range", rng_txt(g.range_) + " cm"),
-            ("eff range", rng_txt(g.eff) + " cm  generated"
-             + ("*" if g.eff_computed else "")),
-            ("", rng_txt(g.formula_eff) + " cm  formula")]
+def _draw_plots(fig, g: DistribGroup, log: bool, zoom: bool,
+                bottom: float) -> tuple | None:
+    """Both pdfs over the full range, between `bottom` and _TOP, with a zoom
+    on the effective ranges under it when `zoom` and zoom_window(g) allow.
+    Returns fractions(g), or None when the formula cannot be evaluated."""
+    try:
+        pr, frac = profile(g), fractions(g)
+    except ValueError as exc:
+        ax = fig.add_axes((_LEFT, bottom, _AX_W, _TOP - bottom))
+        ax.text(0.5, 0.5, f"cannot evaluate the formula:\n{exc}", fontsize=11,
+                ha="center", va="center", transform=ax.transAxes, color="tab:red")
+        ax.set_xlim(*g.range_)
+        return None
+    win = zoom_window(g) if zoom else None
+    if win is None:
+        ax = fig.add_axes((_LEFT, bottom, _AX_W, _TOP - bottom))
+        _plot_pdf(ax, pr, g, log, legend=True)
+        return frac
+    h = _TOP - bottom - _XLABEL_H                 # both plots, without the top x label
+    h_main = _ZOOM_SPLIT * h
+    ax = fig.add_axes((_LEFT, _TOP - h_main, _AX_W, h_main))
+    ax_z = fig.add_axes((_LEFT, bottom, _AX_W, h - h_main))
+    _plot_pdf(ax, pr, g, log, legend=True)
+    _plot_pdf(ax_z, profile(g, *win), g, log, legend=False)
+    ax_z.set_title(f"zoom: effective ranges ± {100 * _ZOOM_MARGIN:g}% of their span",
+                   fontsize=10, loc="left", color=_GREY)
+    return frac
+
+
+def _draw_side_panel(fig, g: DistribGroup, frac: tuple | None) -> None:
+    """The right-hand panel: the sampling table (with the measured fractions
+    `frac`, if given), notes, and the producers."""
     cont = f"{100 * g.containment:g}%"
-    if pr is not None:
-        cont += (f"  (measured: generated {100 * frac_gen:.2f}%,"
-                 f" formula {100 * frac_formula:.2f}%)")
-    rows += [("containment", cont),
-             ("Npx", f"{g.npx}  (TF1::GetRandom table)"),
-             ("volume", ", ".join(g.sources) or "—")]
+    if frac is not None:
+        cont += (f"  (measured: generated {100 * frac[0]:.2f}%,"
+                 f" formula {100 * frac[1]:.2f}%)")
+    rows = [("range", _fmt_range(g.range_, 9) + " cm"),
+            ("eff range", _fmt_range(g.eff, 9) + " cm  generated"
+             + ("*" if g.eff_computed else "")),
+            ("", _fmt_range(g.formula_eff, 9) + " cm  formula"),
+            ("containment", cont),
+            ("Npx", f"{g.npx}  (TF1::GetRandom table)"),
+            ("volume", ", ".join(g.sources) or "—")]
     kw = max(len(k) for k, _ in rows)
-    sampling = "\n".join(f"{k:<{kw}}  {v}" for k, v in rows)
+    sampling = [f"{k:<{kw}}  {v}" for k, v in rows]
 
     names = list(g.producers.items())
     shown = names[:_MAX_PRODUCERS]
     nw = max(len(n) for n, _ in shown)
-    prods = "\n".join(f"{n:<{nw}}  {nucl}" + (f"  ×{k}" if k > 1 else "")
-                      for n, (nucl, k) in shown)
+    prods = [f"{n:<{nw}}  {nucl}" + (f"  ×{k}" if k > 1 else "") for n, (nucl, k) in shown]
     if len(names) > len(shown):
-        prods += f"\n… and {len(names) - len(shown)} more (see --list)"
+        prods.append(f"… and {len(names) - len(shown)} more (see --list)")
 
-    x0, y = _PANEL, _TOP
-    fig.text(x0, y, "Sampling", fontsize=11.5, fontweight="bold", va="top")
-    y -= 0.035
-    fs = _mono_size(sampling.split("\n"), fig, x0, 9.0)
-    fig.text(x0, y, sampling, family=_MONO, fontsize=fs, va="top", linespacing=1.5)
-    y -= (sampling.count("\n") + 1) * fs * 1.5 / 72 / fig.get_figheight() + 0.012
     notes = ["not modelled: redraw outside the volume_gen / material volumes"]
     if g.eff_computed:
         notes.insert(0, f"* recomputed for --npx {g.npx} (the IR has another Npx)")
-    fig.text(x0, y, "\n".join(notes), fontsize=8, color=_GREY, va="top", linespacing=1.4)
-    y -= len(notes) * 8 * 1.4 / 72 / fig.get_figheight() + 0.035
-    fig.text(x0, y, f"Producers ({len(names)})", fontsize=11.5, fontweight="bold", va="top")
-    y -= 0.035
-    fig.text(x0, y, prods, family=_MONO, fontsize=_mono_size(prods.split("\n"), fig, x0, 8.5),
-             va="top", linespacing=1.45)
+
+    x0, y = _PANEL, _TOP
+    fig.text(x0, y, "Sampling", fontsize=_HEADING_SIZE, fontweight="bold", va="top")
+    y -= _HEADING_H
+    fs = _mono_size(sampling, fig, x0, 9.0)
+    fig.text(x0, y, "\n".join(sampling), family=_MONO, fontsize=fs, va="top",
+             linespacing=_LS_TABLE)
+    y -= _text_h(len(sampling), fs, _LS_TABLE, fig) + _NOTE_GAP
+    fig.text(x0, y, "\n".join(notes), fontsize=_NOTE_SIZE, color=_GREY, va="top",
+             linespacing=_LS_NOTE)
+    y -= _text_h(len(notes), _NOTE_SIZE, _LS_NOTE, fig) + _SECTION_GAP
+    fig.text(x0, y, f"Producers ({len(names)})", fontsize=_HEADING_SIZE,
+             fontweight="bold", va="top")
+    y -= _HEADING_H
+    fig.text(x0, y, "\n".join(prods), family=_MONO, fontsize=_mono_size(prods, fig, x0, 8.5),
+             va="top", linespacing=_LS_MONO)
+
+
+def _draw_page(fig, g: DistribGroup, log: bool, source: str,
+               page: int, npages: int, zoom: bool = True) -> None:
+    """One distribution on `fig`: title, plot (+ zoom), formula box, side panel."""
+    where = ", ".join(_surface_text(s) for s in g.surfaces) or "—"
+    fig.text(_LEFT, _TITLE_Y, f"distrib_{g.axis}   ·   {where}",
+             fontsize=15, fontweight="bold", va="baseline")
+    if source:
+        fig.text(_LEFT, _SOURCE_Y, source, fontsize=10, color=_GREY, va="baseline")
+    fig.text(_RIGHT, _FOOT_Y, f"{page} / {npages}", fontsize=9, color=_GREY, ha="right")
+    box_top = _draw_formula_box(fig, g)
+    frac = _draw_plots(fig, g, log, zoom, bottom=box_top + _XLABEL_H)
+    _draw_side_panel(fig, g, frac)
 
 
 def plot_groups(groups: list[DistribGroup], out_path: str, title: str = "",
@@ -459,13 +489,7 @@ def plot_groups(groups: list[DistribGroup], out_path: str, title: str = "",
     otherwise one file per distribution (<stem>_NN<suffix>).
     `title` is printed under each page heading.  Returns the files written.
     """
-    try:
-        import matplotlib
-    except ImportError as exc:
-        raise ImportError("plotting needs matplotlib (pip install matplotlib); "
-                          "--list works without it") from exc
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    plt = import_mpl("--list works without it")
     from matplotlib.backends.backend_pdf import PdfPages
 
     out = Path(out_path)
