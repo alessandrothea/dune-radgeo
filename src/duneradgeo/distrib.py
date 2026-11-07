@@ -44,7 +44,7 @@ from . import _tf1
 from ._fcl import DISTRIB_AXES, DISTRIB_COMMON, distrib_keys
 from ._root import ROOTUnavailable
 from .ir import IRCollection, VolumeEntry
-from .plot import parse_pick_spec, select_volumes
+from ._select import select_volumes, validate_picks
 
 _NPTS       = 100001
 _EFF_COL    = "tab:orange"
@@ -540,12 +540,8 @@ def main() -> None:
         sys.exit(f"[error] '{args.ir_file}' not found")
     ir = IRCollection.load(ir_path)
 
-    for spec in args.pick or ():
-        try:
-            parse_pick_spec(spec)
-        except (ValueError, re.error) as exc:
-            sys.exit(f"[error] --pick: {exc}")
     try:
+        validate_picks(pick=args.pick)
         vols = select_volumes(ir, kinds=["radio"],
                               kind_patterns={"radio": args.radio} if args.radio else None,
                               picks=args.pick)

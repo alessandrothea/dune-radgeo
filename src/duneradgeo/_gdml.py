@@ -17,7 +17,7 @@ from collections import defaultdict
 
 import numpy as np
 
-from ._draw import box_corners_world
+from ._draw import aabb
 
 
 def _rot_matrix_rad(rx: float, ry: float, rz: float) -> np.ndarray:
@@ -48,8 +48,7 @@ def _placed_aabb(bbox: tuple, pos: np.ndarray, rot: np.ndarray) -> tuple:
     """(lo, hi) of box `bbox` = (centre, ext) mapped by x -> rot @ x + pos:
     the envelope of its 8 corners."""
     centre, ext = bbox
-    corners = box_corners_world(pos + rot @ centre, ext, rot)
-    return corners.min(axis=0), corners.max(axis=0)
+    return aabb(pos + rot @ centre, ext, rot)
 
 
 class GeometryBase:

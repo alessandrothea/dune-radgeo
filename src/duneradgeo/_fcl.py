@@ -13,6 +13,7 @@ import sys
 import numpy as np
 
 from . import _tf1
+from ._gdml import _placed_aabb
 
 # ---------------------------------------------------------------------------
 # #include preprocessor
@@ -321,8 +322,6 @@ def _world_aabb_per_hit(geo, patterns: list[str], label: str = "") -> list[tuple
     the box it samples a node in.  Volumes whose solid has no bounding box
     are skipped with a warning naming `label`.
     """
-    from ._draw import box_corners_world
-
     out = []
     unsupported: dict[str, int] = {}
     for vname, pos, rot in geo.find_positions(patterns):
@@ -330,10 +329,8 @@ def _world_aabb_per_hit(geo, patterns: list[str], label: str = "") -> list[tuple
         if bbox is None:
             unsupported[vname] = unsupported.get(vname, 0) + 1
             continue
-        centre, ext = bbox
-        corners = box_corners_world(pos + rot @ centre, ext, rot)
-        out.append((vname, corners.min(axis=0).tolist(),
-                    corners.max(axis=0).tolist()))
+        lo, hi = _placed_aabb(bbox, pos, rot)
+        out.append((vname, lo.tolist(), hi.tolist()))
     for vname, n in unsupported.items():
         print(f"[warn] {label}: no bounding box for the solid of {vname} "
               f"(unsupported shape), {n} placement(s) skipped", file=sys.stderr)

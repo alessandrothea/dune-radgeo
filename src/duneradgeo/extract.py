@@ -49,7 +49,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ._draw import box_corners_world
+from ._draw import aabb
 from ._fcl import (DEFAULT_CONTAINMENT, DISTRIB_AXES, DISTRIB_COMMON,
                    FhiclParser, default_fcl_cache_dir, distrib_keys, expand_fcl,
                    producer_volumes, select_producers)
@@ -122,7 +122,7 @@ def _gdml_volumes(gdml_path: Path,
                       file=sys.stderr)
                 continue
             copy = copies[name] = copies.get(name, -1) + 1
-            corners = []
+            boxes = []
             for part, centre, prot, ext in parts:
                 wpos, wrot = pos + rot @ centre, rot @ prot
                 # multi-part volumes: tag each box with its solid and placement
@@ -134,9 +134,9 @@ def _gdml_volumes(gdml_path: Path,
                     meta["pvpath"] = pvpath
                 entries.append(VolumeEntry(kind=kind, name=name,
                                            pos=wpos, ext=ext, rot=wrot, meta=meta))
-                corners.append(box_corners_world(wpos, ext, wrot))
-            corners = np.vstack(corners)
-            lo, hi  = corners.min(axis=0), corners.max(axis=0)
+                boxes.append(aabb(wpos, ext, wrot))
+            lo = np.min([b[0] for b in boxes], axis=0)
+            hi = np.max([b[1] for b in boxes], axis=0)
             c, d    = (lo + hi) / 2, hi - lo
             nparts  = f"  ({len(parts)} parts)" if len(parts) > 1 else ""
             print(f"  {kind:<8} {name:<40s}"
