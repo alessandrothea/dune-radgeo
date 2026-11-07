@@ -4,10 +4,18 @@ bki-distrib  —  draw the distrib_x/y/z position profiles stored in a JSON IR
 RadioGen/Decay0Gen producers with a distrib_<axis> parameter do not sample
 that coordinate uniformly.  The parameter is a TF1 formula in the variable x,
 drawn with TF1::GetRandom over the box range on that axis (larsimrad
-BaseRadioGen).  This command draws each formula as a pdf over that range,
-with the effective range bki-extract used for the box (<axis>_eff_range, the
-shortest interval holding eff_containment of the pdf) shaded.  Producers sharing a formula and range share one plot; each
-plot is a page of the PDF (other formats: one file per plot).
+BaseRadioGen).  GetRandom samples from an Npx-point table (BaseRadioGen keeps
+ROOT's default, 100), so features narrower than range/Npx are not reproduced.
+Each page shows, over the full range:
+  * the formula, evaluated by ROOT (TF1::Eval);
+  * the distribution as generated, from ROOT's own GetRandom table
+    (TF1::GetQuantiles with Npx points);
+with the effective range of the generated distribution shaded (the box
+bki-extract writes, <axis>_eff_range) and that of the formula marked.
+Producers sharing a formula and range share one plot; each plot is a page of
+the PDF (other formats: one file per plot).  Needs PyROOT.  Not modelled: the
+redraw of points outside the volumes allowed by volume_gen / material (e.g.
+the gas above the liquid).
 Coordinates are world coordinates, as the generator samples them, also for
 IRs written with bki-extract --frame.
 
@@ -17,9 +25,8 @@ Usage:
   bki-distrib detector.json --list              # text only, no matplotlib
   bki-distrib detector.json --radio 'Mesh|Cathode'
 
-IRs written before bki-extract stored <axis>_range only have the containment
-interval: the profile is then drawn over that interval only (or over
---range LO HI).  Re-run bki-extract to get the full sampling range.
+Reads <axis>_range, <axis>_eff_range, <axis>_formula_eff_range,
+eff_containment and eff_npx from the IR, as written by bki-extract.
 """
 from __future__ import annotations
 
@@ -32,13 +39,15 @@ from pathlib import Path
 
 import numpy as np
 
-from ._fcl import DISTRIB_AXES, eval_tf1
+from . import _tf1
+from ._fcl import DISTRIB_AXES
 from .ir import IRCollection, VolumeEntry
 from .plot import parse_pick_spec, select_volumes
 
 _NPTS       = 100001
 _EFF_COL    = "tab:orange"
-_CURVE_COL  = "tab:blue"
+_CURVE_COL  = "tab:blue"        # as generated (TF1::GetRandom)
+_FORMULA_COL = "0.1"            # the formula
 
 
 @dataclass
@@ -47,9 +56,11 @@ class DistribGroup:
     axis:      str
     formula:   str
     rng:       tuple                       # (lo, hi) sampling range [cm]
-    full:      bool                        # rng is the stored <axis>_range
-    eff:       tuple | None = None         # effective range (containment interval) [cm]
-    containment: float | None = None       # eff_containment stored by bki-extract
+    eff:       tuple                       # effective range, as generated [cm]
+    formula_eff: tuple                     # effective range of the formula [cm]
+    containment: float                     # fraction in either effective range
+    npx:       int                         # TF1 Npx of the generated distribution
+    eff_computed: bool = False             # eff recomputed for another --npx
     surfaces:  list[str]  = field(default_factory=list)
     sources:   list[str]  = field(default_factory=list)   # volume_rand:…, explicit, …
     # producer name -> [nuclide, number of placements]
@@ -63,36 +74,36 @@ def _key_range(r) -> tuple:
     return tuple(round(float(v), 3) for v in r)
 
 
-def collect(vols: list[VolumeEntry], fallback: tuple | None = None) -> list[DistribGroup]:
-    """Group the distrib_* entries of the radio volumes in `vols`."""
+_KEYS = ("{a}_range", "{a}_eff_range", "{a}_formula_eff_range")
+
+
+def collect(vols: list[VolumeEntry]) -> list[DistribGroup]:
+    """Group the distrib_* entries of the radio volumes in `vols`.
+
+    Raises ValueError when an entry lacks the keys bki-extract writes."""
     groups: dict[tuple, DistribGroup] = {}
     for v in vols:
         if v.kind != "radio":
             continue
         m = v.meta
-        for ax, axis in enumerate(DISTRIB_AXES):
+        for axis in DISTRIB_AXES:
             formula = m.get(f"distrib_{axis}")
             if not formula:
                 continue
-            # <axis>_eff_range; IRs before the rename call it <axis>_eff
-            eff  = m.get(f"{axis}_eff_range", m.get(f"{axis}_eff"))
-            rng  = m.get(f"{axis}_range")
-            full = rng is not None
-            if rng is None:
-                if fallback is not None:
-                    rng = fallback
-                else:
-                    # the box extent on this axis is the containment interval
-                    rng = eff if eff else (v.pos[ax] - v.ext[ax] / 2,
-                                           v.pos[ax] + v.ext[ax] / 2)
-            cont = m.get("eff_containment")     # absent in IRs before it was stored
-            key = (axis, formula, _key_range(rng), _key_range(eff) if eff else None, cont)
+            need = [k.format(a=axis) for k in _KEYS] + ["eff_containment", "eff_npx"]
+            missing = [k for k in need if k not in m]
+            if missing:
+                raise ValueError(f"{v.name}: IR entry lacks {', '.join(missing)}; "
+                                 f"re-run bki-extract")
+            rng, eff, feff = (tuple(map(float, m[k.format(a=axis)])) for k in _KEYS)
+            cont, npx = float(m["eff_containment"]), int(m["eff_npx"])
+            key = (axis, formula, _key_range(rng), _key_range(eff), _key_range(feff),
+                   cont, npx)
             g = groups.get(key)
             if g is None:
-                g = groups[key] = DistribGroup(axis=axis, formula=formula,
-                                               rng=tuple(map(float, rng)), full=full,
-                                               eff=tuple(map(float, eff)) if eff else None,
-                                               containment=cont)
+                g = groups[key] = DistribGroup(axis=axis, formula=formula, rng=rng,
+                                               eff=eff, formula_eff=feff,
+                                               containment=cont, npx=npx)
             surf = m.get("surface")
             if surf and surf not in g.surfaces:
                 g.surfaces.append(surf)
@@ -104,34 +115,37 @@ def collect(vols: list[VolumeEntry], fallback: tuple | None = None) -> list[Dist
     return list(groups.values())
 
 
-def _integrate(f: np.ndarray, x: np.ndarray) -> float:
-    """Trapezoid rule (np.trapz is gone in numpy 2, np.trapezoid absent in 1.x)."""
-    return float(np.sum(0.5 * (f[1:] + f[:-1]) * np.diff(x)))
+def with_npx(g: DistribGroup, npx: int) -> DistribGroup:
+    """`g` for another TF1 Npx: the generated effective range is recomputed
+    (needs PyROOT)."""
+    if npx != g.npx:
+        g.eff = _tf1.generated_interval(g.formula, *g.rng, g.containment, npx)
+        g.npx, g.eff_computed = npx, True
+    return g
 
 
-def evaluate(g: DistribGroup, npts: int = _NPTS) -> tuple:
-    """
-    (x, pdf, fraction in eff, norm): the formula normalised to 1 over g.rng.
-    The fraction is integrated on its own grid over the effective range, so
-    it does not depend on where the range edges fall on the full-range grid.
-    """
-    x = np.linspace(g.rng[0], g.rng[1], npts)
-    f = eval_tf1(g.formula, x)
-    norm = _integrate(f, x)
-    if not norm > 0:
-        raise ValueError("formula integrates to 0 over the range")
-    frac = None
-    if g.eff is not None:
-        xe, pe = pdf_on(g, g.eff[0], g.eff[1], norm, npts)
-        frac = _integrate(pe, xe)
-    return x, f / norm, frac, norm
+@dataclass
+class Profile:
+    """A group's distributions on a grid: the formula and what is generated."""
+    x:           np.ndarray
+    formula:     np.ndarray      # formula pdf, normalised over the full range
+    generated:   np.ndarray      # GetRandom pdf, normalised over the full range
+    frac_gen:    float           # generated distribution inside g.eff
+    frac_formula: float          # formula pdf inside g.formula_eff
 
 
-def pdf_on(g: DistribGroup, lo: float, hi: float, norm: float,
-           npts: int = _NPTS) -> tuple:
-    """(x, pdf) on [lo, hi], with the normalisation `norm` of the full range."""
+def profile(g: DistribGroup, lo: float | None = None, hi: float | None = None,
+            npts: int = _NPTS) -> Profile:
+    """Both pdfs of a resolved group on [lo, hi] (default: the full range)."""
+    lo = g.rng[0] if lo is None else lo
+    hi = g.rng[1] if hi is None else hi
+    _, _, norm = _tf1.formula_pdf(g.formula, *g.rng)
     x = np.linspace(lo, hi, npts)
-    return x, eval_tf1(g.formula, x) / norm
+    fpdf = np.clip(_tf1.evaluate(g.formula, x), 0, None) / norm
+    gpdf = _tf1.generated_pdf(g.formula, *g.rng, x, g.npx)
+    c = _tf1.generated_cdf(g.formula, *g.rng, list(g.eff), g.npx)
+    ff = _tf1.formula_fraction(g.formula, *g.rng, *g.formula_eff)
+    return Profile(x, fpdf, gpdf, float(c[1] - c[0]), ff)
 
 
 # ---------------------------------------------------------------------------
@@ -144,18 +158,16 @@ def _fmt_rng(r) -> str:
 
 def print_groups(groups: list[DistribGroup]) -> None:
     for i, g in enumerate(groups):
-        try:
-            _, _, frac, _ = evaluate(g)
-            ftxt = ""
-            if g.containment is not None:
-                ftxt += f"  containment {g.containment:g}"
-            if frac is not None:
-                ftxt += f"  (measured {frac:.4f})"
-        except Exception as exc:                      # noqa: BLE001
-            ftxt = f"  [cannot evaluate: {exc}]"
         print(f"[{i}] {g.label()}  range {_fmt_rng(g.rng)}"
-              f"{'' if g.full else ' (containment interval only)'}"
-              f"  eff_range {_fmt_rng(g.eff) if g.eff else '-'}{ftxt}")
+              f"  containment {g.containment:g}  npx {g.npx}")
+        try:
+            pr = profile(g, npts=3)
+            print(f"    eff_range (generated) {_fmt_rng(g.eff)}  (measured {pr.frac_gen:.4f})"
+                  + ("  [recomputed for --npx]" if g.eff_computed else ""))
+            print(f"    formula eff range     {_fmt_rng(g.formula_eff)}"
+                  f"  (measured {pr.frac_formula:.4f})")
+        except ValueError as exc:
+            print(f"    [cannot evaluate: {exc}]")
         if g.surfaces:
             print(f"    surface: {', '.join(g.surfaces)}")
         print(f"    formula: {g.formula}")
@@ -249,25 +261,23 @@ def _mono_size(lines: list[str], fig, x0: float, base: float) -> float:
     return min(base, avail / (0.61 * chars))
 
 
-def _eff_label(g: DistribGroup, frac: float | None) -> str:
-    if g.containment is not None:
-        return f"effective range ({100 * g.containment:g}% containment)"
-    if frac is not None:
-        return f"effective range ({100 * frac:.1f}% of the pdf)"
-    return "effective range"
-
-
-def _plot_pdf(ax_, x, pdf, g: DistribGroup, frac, log: bool, legend: bool) -> None:
-    ax_.plot(x, pdf, color=_CURVE_COL, lw=1.8, label="pdf")
-    if g.eff is not None:
-        ax_.axvspan(*g.eff, color=_EFF_COL, alpha=0.22, lw=0, label=_eff_label(g, frac))
-        for e in g.eff:
-            ax_.axvline(e, color=_EFF_COL, lw=1.0, ls="--")
+def _plot_pdf(ax_, pr: Profile, g: DistribGroup, log: bool, legend: bool) -> None:
+    c = f"{100 * g.containment:g}%"
+    ax_.plot(pr.x, pr.formula, color=_FORMULA_COL, lw=1.4, label="formula (TF1::Eval)")
+    ax_.plot(pr.x, pr.generated, color=_CURVE_COL, lw=1.8, alpha=0.9,
+             label=f"as generated (TF1::GetRandom, Npx={g.npx})")
+    ax_.axvspan(*g.eff, color=_EFF_COL, alpha=0.22, lw=0,
+                label=f"effective range, as generated ({c})")
+    for e in g.eff:
+        ax_.axvline(e, color=_EFF_COL, lw=1.0, ls="--")
+    for k, e in enumerate(g.formula_eff):
+        ax_.axvline(e, color=_FORMULA_COL, lw=1.0, ls=":",
+                    label=f"effective range of the formula ({c})" if k == 0 else None)
     if log:
         ax_.set_yscale("log")
     if legend:
         ax_.legend(loc="best", fontsize=10, framealpha=0.9)
-    ax_.set_xlim(x[0], x[-1])
+    ax_.set_xlim(pr.x[0], pr.x[-1])
     ax_.set_xlabel(f"{g.axis}  [cm, world]", fontsize=11)
     ax_.set_ylabel("probability density  [1/cm]", fontsize=11)
     ax_.tick_params(labelsize=10)
@@ -275,14 +285,14 @@ def _plot_pdf(ax_, x, pdf, g: DistribGroup, frac, log: bool, legend: bool) -> No
 
 
 def zoom_window(g: DistribGroup) -> tuple | None:
-    """The zoom window around the eff range, or None when no zoom is useful."""
-    if g.eff is None:
-        return None
-    w, W = g.eff[1] - g.eff[0], g.rng[1] - g.rng[0]
+    """The zoom window around both effective ranges, or None when no zoom is
+    useful (they cover more than _ZOOM_FRAC of the range)."""
+    a = min(g.eff[0], g.formula_eff[0])
+    b = max(g.eff[1], g.formula_eff[1])
+    w, W = b - a, g.rng[1] - g.rng[0]
     if not (W > 0 and w < _ZOOM_FRAC * W):
         return None
-    return (max(g.rng[0], g.eff[0] - _ZOOM_MARGIN * w),
-            min(g.rng[1], g.eff[1] + _ZOOM_MARGIN * w))
+    return (max(g.rng[0], a - _ZOOM_MARGIN * w), min(g.rng[1], b + _ZOOM_MARGIN * w))
 
 
 def _draw_page(fig, g: DistribGroup, log: bool, source: str,
@@ -303,10 +313,10 @@ def _draw_page(fig, g: DistribGroup, log: bool, source: str,
 
     # ---- plot (+ zoom on the effective range) ----
     try:
-        x, pdf, frac, norm = evaluate(g)
+        pr = profile(g)
         err = None
-    except Exception as exc:                      # noqa: BLE001
-        x = pdf = frac = norm = None
+    except ValueError as exc:
+        pr = None
         err = exc
     win = zoom_window(g) if (zoom and err is None) else None
     if win is None:
@@ -321,11 +331,10 @@ def _draw_page(fig, g: DistribGroup, log: bool, source: str,
                  ha="center", va="center", transform=ax_.transAxes, color="tab:red")
         ax_.set_xlim(*g.rng)
     else:
-        _plot_pdf(ax_, x, pdf, g, frac, log, legend=True)
+        _plot_pdf(ax_, pr, g, log, legend=True)
     if win is not None:
-        xz, pz = pdf_on(g, win[0], win[1], norm)
-        _plot_pdf(ax_z, xz, pz, g, frac, log, legend=False)
-        ax_z.set_title(f"zoom: effective range ± {100 * _ZOOM_MARGIN:g}% of its width",
+        _plot_pdf(ax_z, profile(g, *win), g, log, legend=False)
+        ax_z.set_title(f"zoom: effective ranges ± {100 * _ZOOM_MARGIN:g}% of their span",
                        fontsize=10, loc="left", color=_GREY)
 
     # ---- formula (monospace) ----
@@ -337,16 +346,17 @@ def _draw_page(fig, g: DistribGroup, log: bool, source: str,
     def rng_txt(r):
         return f"[{r[0]:9.3f}, {r[1]:9.3f}]"
 
-    rows = [("range", rng_txt(g.rng) + " cm")]
-    if g.eff is not None:
-        rows.append(("eff range", rng_txt(g.eff) + " cm"))
-        cont = [f"{100 * g.containment:g}%"] if g.containment is not None else []
-        if frac is not None:
-            cont.append(f"(measured {100 * frac:.2f}%)" if cont
-                        else f"{100 * frac:.2f}% of the pdf (measured)")
-        if cont:
-            rows.append(("containment", " ".join(cont)))
-    rows.append(("volume", ", ".join(g.sources) or "—"))
+    rows = [("range", rng_txt(g.rng) + " cm"),
+            ("eff range", rng_txt(g.eff) + " cm  generated"
+             + ("*" if g.eff_computed else "")),
+            ("", rng_txt(g.formula_eff) + " cm  formula")]
+    cont = f"{100 * g.containment:g}%"
+    if pr is not None:
+        cont += (f"  (measured: generated {100 * pr.frac_gen:.2f}%,"
+                 f" formula {100 * pr.frac_formula:.2f}%)")
+    rows += [("containment", cont),
+             ("Npx", f"{g.npx}  (TF1::GetRandom table)"),
+             ("volume", ", ".join(g.sources) or "—")]
     kw = max(len(k) for k, _ in rows)
     sampling = "\n".join(f"{k:<{kw}}  {v}" for k, v in rows)
 
@@ -363,12 +373,12 @@ def _draw_page(fig, g: DistribGroup, log: bool, source: str,
     y -= 0.035
     fs = _mono_size(sampling.split("\n"), fig, x0, 9.0)
     fig.text(x0, y, sampling, family=_MONO, fontsize=fs, va="top", linespacing=1.5)
-    y -= (sampling.count("\n") + 1) * fs * 1.5 / 72 / fig.get_figheight() + 0.04
-    if not g.full:
-        fig.text(x0, y, "Full range not stored in this IR: drawn over the\n"
-                        "containment interval only. Re-run bki-extract.",
-                 fontsize=9, color="tab:red", va="top")
-        y -= 0.07
+    y -= (sampling.count("\n") + 1) * fs * 1.5 / 72 / fig.get_figheight() + 0.012
+    notes = ["not modelled: redraw outside the volume_gen / material volumes"]
+    if g.eff_computed:
+        notes.insert(0, f"* recomputed for --npx {g.npx} (the IR has another Npx)")
+    fig.text(x0, y, "\n".join(notes), fontsize=8, color=_GREY, va="top", linespacing=1.4)
+    y -= len(notes) * 8 * 1.4 / 72 / fig.get_figheight() + 0.035
     fig.text(x0, y, f"Producers ({len(names)})", fontsize=11.5, fontweight="bold", va="top")
     y -= 0.035
     fig.text(x0, y, prods, family=_MONO, fontsize=_mono_size(prods.split("\n"), fig, x0, 8.5),
@@ -437,7 +447,8 @@ def main() -> None:
                          "one page per distribution, other formats one file "
                          "per distribution, <stem>_NN<suffix>")
     ap.add_argument("--list", "-l", action="store_true",
-                    help="print the distributions and their producers, then exit")
+                    help="print the distributions, effective ranges and producers, "
+                         "then exit (needs ROOT, not matplotlib)")
     ap.add_argument("--radio", nargs="+", default=None, metavar="PATTERN",
                     help="regex filter on radio producer names")
     ap.add_argument("--pick", nargs="+", default=None, metavar="SPEC",
@@ -445,10 +456,10 @@ def main() -> None:
                          "or @REGEX on surface, node, nuclide)")
     ap.add_argument("--axis", nargs="+", choices=DISTRIB_AXES, default=None,
                     help="only these axes (default: all present)")
-    ap.add_argument("--range", nargs=2, type=float, default=None,
-                    metavar=("LO", "HI"),
-                    help="sampling range [cm] for IR entries without a stored "
-                         "<axis>_range (older IRs)")
+    ap.add_argument("--npx", type=int, default=None,
+                    help="TF1 Npx for the generated distribution (default: the "
+                         "eff_npx stored in the IR); another value recomputes the "
+                         "generated effective range")
     ap.add_argument("--log", action="store_true", help="logarithmic y axis")
     ap.add_argument("--no-zoom", action="store_true",
                     help="no zoomed view on the effective range (by default it is "
@@ -474,7 +485,10 @@ def main() -> None:
     except ValueError as exc:
         sys.exit(f"[error] {exc}")
 
-    groups = collect(vols, fallback=tuple(args.range) if args.range else None)
+    try:
+        groups = collect(vols)
+    except ValueError as exc:
+        sys.exit(f"[error] {exc}")
     if args.axis:
         groups = [g for g in groups if g.axis in args.axis]
     if not groups:
@@ -482,10 +496,22 @@ def main() -> None:
                  "(after the selectors)")
     print(f"[info] {len(groups)} distribution(s) from "
           f"{sum(len(g.producers) for g in groups)} producer entr(ies)", file=sys.stderr)
-    if any(not g.full for g in groups) and args.range is None:
-        print("[warn] IR has no <axis>_range: drawing over the containment "
-              "interval only; re-run bki-extract or pass --range",
-              file=sys.stderr)
+
+    # every group is evaluated by ROOT; drop those whose formula it rejects
+    kept = []
+    for g in groups:
+        try:
+            if args.npx:
+                with_npx(g, args.npx)
+            _tf1.formula_pdf(g.formula, *g.rng, npts=3)
+            kept.append(g)
+        except _tf1.ROOTUnavailable as exc:
+            sys.exit(f"[error] {exc}")
+        except ValueError as exc:
+            print(f"[warn] {g.label()} {g.formula!r}: {exc}; skipped", file=sys.stderr)
+    groups = kept
+    if not groups:
+        sys.exit("[error] no distribution could be evaluated")
 
     if args.list:
         print_groups(groups)

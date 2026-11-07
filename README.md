@@ -9,9 +9,11 @@ Inspect DUNE background sources without a LArSoft environment:
 - **radiological position profiles** — the `distrib_x/y/z` formulas of those
   producers, drawn over the range the generator samples
 
-Pure Python (NumPy + Matplotlib + Plotly), no PyROOT or LArSoft required.
-Optionally, the GDML can be read with ROOT instead of the built-in parser
-(see [GDML backends](#gdml-backends)).
+Python (NumPy + Matplotlib + Plotly), no LArSoft required.  PyROOT is needed
+for the `distrib_x/y/z` formulas, which are ROOT TF1 expressions and are
+evaluated by ROOT (see [bki-distrib](#bki-distrib)).  Optionally, the GDML can
+also be read with ROOT instead of the built-in parser (see
+[GDML backends](#gdml-backends)).
 
 ---
 
@@ -24,17 +26,20 @@ uv sync --no-group root  # everything but ROOT
 pip install .            # everything but ROOT
 ```
 
-ROOT is only needed for `bki-extract --gdml-backend root`.  It is a uv
-dependency group installed by default, not a package dependency, so `pip`
-never installs it: in a dunesw area the stack's ROOT is used and is not
+ROOT is needed to evaluate `distrib_x/y/z` formulas (`bki-extract` on a FCL
+with such producers, `bki-distrib`) and for `bki-extract --gdml-backend
+root`.  It is a uv dependency group installed by default, not a package
+dependency, so `pip` never installs it: in a dunesw area the stack's ROOT is used and is not
 shadowed by the pip wheel.  The `root` pip wheels exist for CPython 3.14
 only (the group is skipped on older Pythons), and the current ones
 (0.1a12) are built without TGeo/GDML, so for now `--gdml-backend root`
-works only with a full ROOT such as the dunesw one.
+works only with a full ROOT such as the dunesw one (TF1, used for the
+formulas, is in every build).  The pip wheel prints an "alpha stage" warning
+on import; duneradgeo silences it.
 
-`bki-extract` itself needs only NumPy.  For an extraction-only install,
-e.g. on top of a LArSoft Python that already provides NumPy, skip the
-dependencies:
+`bki-extract` itself needs only NumPy, plus PyROOT for producers with
+`distrib_x/y/z`.  For an extraction-only install, e.g. on top of a LArSoft
+Python that already provides NumPy and PyROOT, skip the dependencies:
 
 ```bash
 pip install --no-deps .          # add numpy if the environment lacks it
@@ -42,11 +47,11 @@ pip install --no-deps .          # add numpy if the environment lacks it
 
 | Package | Used by |
 |---------|---------|
-| `numpy` | everything (`bki-extract`, `bki-plot --list` / `-L`, `bki-distrib --list` need nothing else) |
+| `numpy` | everything (`bki-extract` of geometry and producers without `distrib_*`, `bki-plot --list` / `-L` need nothing else) |
 | `matplotlib` | `bki-plot` and `bki-distrib` PDF/PNG output, `plot_ir` |
 | `plotly` | `make_figure` |
 | `jupyter`, `nbconvert` | `nb_B.ipynb`, `scripts/run_notebook.py` |
-| `root` (group, optional) | `bki-extract --gdml-backend root`, `scripts/compare_backends.py` (needs TGeo/GDML) |
+| `root` (group) | `distrib_*` formulas: `bki-extract` of producers with `distrib_*`, `bki-distrib`, `tests/test_tf1.py`; `bki-extract --gdml-backend root`, `scripts/compare_backends.py` (need TGeo/GDML) |
 
 In a `--no-deps` install, rendering a plot without matplotlib stops with an
 `ImportError` that says what to install.
@@ -81,7 +86,7 @@ geometry.gdml -o /abs/ir.json --gdml-backend root`).
 
 `bki-plot` and `bki-distrib` plots need matplotlib, which the area does not
 have: plot the JSON on the host with `uv run bki-plot` / `uv run bki-distrib`.
-`bki-distrib --list` works in the area. After pulling a version that adds a
+`bki-distrib --list` works in the area (it uses the area's ROOT). After pulling a version that adds a
 command, re-run the install script: an editable install only creates the
 command scripts at install time (`python -m duneradgeo.<module>` works
 regardless).
@@ -204,7 +209,11 @@ bki-extract <input> --out <ir.json>
   --select REGEX      regex filter on producer labels
   --all-configured    include producers not on any trigger path
   --containment F     distrib_x/y/z containment fraction for the effective
-                      range, stored as meta.eff_containment (default 0.99)
+                      ranges, stored as meta.eff_containment (default 0.99)
+  --npx N             TF1 Npx of the generator: the effective range is that of
+                      the distribution TF1::GetRandom draws from an N-point
+                      table, stored as meta.eff_npx (default 100, ROOT's
+                      default, which larsimrad BaseRadioGen keeps)
   --fcl-cache DIR     cache directory for expanded FCL files
                       (default: ~/.cache/bki-extract/fcl)
   --no-fcl-cache      always re-run the FCL expansion
@@ -358,16 +367,38 @@ with `TF1::GetRandom` over the box range on that axis: `X0..X1` etc., the
 `volume_rand` bounding box, or each `volume_gen` node's box. Axes without a
 formula are sampled uniformly.
 
-`bki-extract` shrinks the box on that axis to the shortest interval holding
-`--containment` of the pdf (`<axis>_eff_range`, the effective range), and
-records the full range (`<axis>_range`) and the fraction (`eff_containment`).
-`bki-distrib` draws each formula as a pdf over the full range and shades the
-effective range, one distribution per page of the PDF. When the effective
-range is much narrower than the full range (a peaked profile such as a
-surface source), a zoomed view on it is added below. Producers that share a
-formula and range share a page, which lists them.
-Coordinates are world coordinates, which is what the generator uses, even for
-IRs written with `--frame`.
+The formulas are ROOT TFormula expressions, so they are evaluated by ROOT
+(`duneradgeo._tf1`), never translated. Two distributions are described:
+
+- **the formula**: `TF1::Eval`, normalised over the range;
+- **as generated**: `GetRandom` draws from a cumulative table of `Npx`
+  points with a parabolic interpolation inside each bin. `BaseRadioGen` does
+  not call `SetNpx`, so ROOT's default of 100 applies: over the 850 cm of
+  `volCryostat` the bins are 8.5 cm wide, and a narrower feature is not
+  reproduced. The distribution is read from ROOT's own table
+  (`TF1::GetQuantiles`, at most `Npx / 2` probabilities per call so that ROOT
+  keeps the `Npx`-point table), without sampling.
+
+For the upper-mesh producers (a Gaussian of σ = 0.5 cm at x = −320 cm plus
+a constant), the generated distribution is a ramp from −323.08 to −318.75 cm
+instead of the Gaussian. A `lar` job with Decay0Gen confirms this: its 2.4M
+decay vertices match the `GetRandom` table to 0.01 cm (`tests/test_tf1.py`
+holds the reference quantiles). Smooth profiles, such as the bulk LAr ones,
+are not affected.
+
+`bki-extract` records, per axis with a formula, the full range
+(`<axis>_range`), the shortest interval holding `--containment` of the
+generated distribution (`<axis>_eff_range`, the effective range, which
+becomes the box on that axis) and the same for the formula
+(`<axis>_formula_eff_range`), plus `eff_containment` and `eff_npx`.
+
+`bki-distrib` draws, over the full range, the formula (black) and the
+generated distribution (blue), shades the generated effective range and
+marks the formula's (dotted), one distribution per page of the PDF. When the
+effective ranges are much narrower than the full range, a zoomed view on
+them is added below. Producers that share a formula and range share a page,
+which lists them. Coordinates are world coordinates, which is what the
+generator uses, even for IRs written with `--frame`.
 
 ```
 bki-distrib <ir.json> [options]
@@ -375,44 +406,48 @@ bki-distrib <ir.json> [options]
   --out, -o FILE      output (default: <stem>_distrib.pdf). A PDF has one page per
                       distribution; other formats give one file per
                       distribution, <stem>_NN<suffix>
-  --list, -l          print the distributions, ranges, containment fraction and
-                      producers, then exit (no matplotlib needed)
+  --list, -l          print the distributions, both effective ranges with their
+                      measured containment, and the producers, then exit
+                      (needs ROOT, not matplotlib)
   --radio PATTERN …   regex filter on radio producer names
   --pick SPEC …       PRODUCER_RE#SEL, as for bki-plot --surface
   --axis {x,y,z} …    only these axes
-  --range LO HI       sampling range for IRs without <axis>_range
+  --npx N             Npx of the generated distribution (default: eff_npx from
+                      the IR); another value recomputes its effective range,
+                      e.g. --npx 10000 for a generator that sets SetNpx(10000)
   --log               logarithmic y axis
-  --no-zoom           no zoomed view on the effective range (default: added
-                      below the plot when the effective range is narrower
-                      than half the full range; window = eff range ± 25%)
+  --no-zoom           no zoomed view on the effective ranges (default: added
+                      below the plot when they are narrower than half the
+                      full range; window = their span ± 25%)
   --title TEXT        figure title
 ```
 
 ```bash
 bki-distrib radbkg.json --log
 bki-distrib radbkg.json --list --radio 'UpperMesh'
-# [0] distrib_x  range [-425.120, 425.200]  eff_range [-321.704, -318.328]  containment 0.99  (measured 0.9900)
-#     surface: plane_x@-320.016
+# [0] distrib_x  range [-425.120, 425.200]  containment 0.99  npx 100
+#     eff_range (generated) [-323.082, -318.753]  (measured 0.9900)
+#     formula eff range     [-321.704, -318.328]  (measured 0.9900)
+#     surface: plane_x@-320.917
 #     formula: (7.2257e+4*TMath::Exp(-(x+320.)*(x+320.)/(2.*0.5*0.5)))+1.
 #     K42From42ArGenInUpperMesh1x8x14  (K42)
-#     Rn222ChainFromPo218GenInUpperMesh1x8x14  (Po218)
 #     ...
 ```
 
 Each page has the formula (monospace, one term per line, with `TMath::`
-dropped, `Abs(a)` as `|a|` and `Power(a,n)` as `a^n`; `--list` prints the
-exact FHiCL string), and a side panel with the full and effective ranges,
-the containment (stored and measured), the generator volume (`meta.source`)
-and the producers with their nuclides.
+dropped, `Abs(a)` as `|a|` and `Power(a,n)` as `a^n`, for display only;
+`--list` prints the exact FHiCL string), and a side panel with the full and
+both effective ranges, the containment (stored, and measured for each
+distribution), `Npx`, the generator volume (`meta.source`) and the producers
+with their nuclides.
 
-The plotted pdf is the formula alone. The generator also rejects points that
-fall outside the volumes allowed by `volume_gen` / `material` (e.g.
-`material: LAr` in the `volCryostat` box), so the generated distribution is
-the formula times that acceptance, which `bki-distrib` does not model.
+Not modelled: the generator also redraws points that fall outside the
+volumes allowed by `volume_gen` / `material`. With `material: LAr` in the
+`volCryostat` box, nothing is generated in the gas above the liquid (x >
+325.09 cm in the 1x8x14 VD geometry), and the profile is renormalised over
+the liquid.
 
-IRs written before `<axis>_range` was stored only have the effective range.
-The profile is then drawn over that range only, unless you pass `--range`.
-Re-run `bki-extract` to get the full range.
+IR files must carry the keys above: re-run `bki-extract` for older ones.
 
 ---
 
@@ -436,7 +471,7 @@ bki-extract prodbackground_radio.fcl -o rn.json --select 'Rn222|Po210' --all-con
 # use a different geometry than the one named in AuxDetGeometry.GDML
 bki-extract prodbackground_radio.fcl -o radio.json --gdml /path/to/geometry.gdml
 
-# narrower effective range for producers with a distrib_x/y/z profile (95% containment)
+# narrower effective ranges for producers with a distrib_x/y/z profile (95% containment)
 bki-extract prodbackground_radio.fcl -o radio.json --containment 0.95
 
 # an included .fcl was edited: bypass the expansion cache
@@ -738,15 +773,16 @@ bki-plot planes.json -L --kind struct --highlight '^volTPCPlaneU$#@_PV_Bot'
     {
       "kind": "radio",
       "name": "K42From42ArGenInUpperMesh1x8x14",
-      "pos":  [-320.016, 0.0, 1045.94],
-      "ext":  [3.376, 1507.84, 2306.12],
+      "pos":  [-320.917, 0.0, 1045.94],
+      "ext":  [4.329, 1507.84, 2306.12],
       "rot":  [[1,0,0],[0,1,0],[0,0,1]],
       "meta": {"source": "volume_rand:volCryostat", "nuclide": "K42",
                "module_type": "Decay0Gen", "rate": 1.94372,
-               "surface": "plane_x@-320.016",
+               "surface": "plane_x@-320.917",
                "distrib_x": "(7.2257e+4*TMath::Exp(-(x+320.)*(x+320.)/(2.*0.5*0.5)))+1.",
-               "x_range": [-425.12, 425.20], "x_eff_range": [-321.704, -318.328],
-               "eff_containment": 0.99, "index": 0}
+               "x_range": [-425.12, 425.20], "x_eff_range": [-323.082, -318.753],
+               "x_formula_eff_range": [-321.704, -318.328],
+               "eff_containment": 0.99, "eff_npx": 100, "index": 0}
     }
   ]
 }
@@ -762,14 +798,13 @@ bki-plot planes.json -L --kind struct --highlight '^volTPCPlaneU$#@_PV_Bot'
 
 For radio entries, `meta` also holds, for each axis with a `distrib_<axis>`
 formula: the formula, `<axis>_range` (the full box range it is sampled over,
-the source of truth) and `<axis>_eff_range` (the effective range: the shortest
-interval holding `--containment` of the pdf, which becomes the box extent on
-that axis; derived by `bki-extract`, not a module parameter). These are world
-coordinates. `eff_containment` records the `--containment` fraction used for
-the effective ranges (e.g. `0.99`). The box (`pos`/`ext`) is the full box on
-the axes without a formula and the effective range on the others. IRs written
-before the rename have
-`<axis>_eff` instead and no `eff_containment`; `bki-distrib` reads both forms.
+the source of truth), `<axis>_eff_range` (the effective range: the shortest
+interval holding `eff_containment` of the distribution `TF1::GetRandom`
+generates with `eff_npx` table points, which becomes the box extent on that
+axis) and `<axis>_formula_eff_range` (the same for the formula pdf). The
+effective ranges are derived by `bki-extract` with ROOT, not module
+parameters. These are world coordinates. The box (`pos`/`ext`) is the full
+box on the axes without a formula and the effective range on the others.
 
 `producers` is present for FCL input. It holds the complete FHiCL table of
 every selected radiological producer, keyed by module label, and is stored
@@ -844,12 +879,20 @@ make_figure(sub).show()
 Position profiles (`bki-distrib`):
 
 ```python
-from duneradgeo.distrib import collect, evaluate, plot_groups
+from duneradgeo.distrib import collect, profile, with_npx, plot_groups
 from duneradgeo.plot import select_volumes
 
 groups = collect(select_volumes(ir, kinds=["radio"]))   # one group per formula + range
-x, pdf, frac, norm = evaluate(groups[0])                # pdf over the full range
+pr = profile(groups[0])          # pr.x, pr.formula, pr.generated (pdfs), pr.frac_gen
 plot_groups(groups, "profiles.pdf", log=True)           # one page per group
+
+# the formulas directly, evaluated by ROOT
+from duneradgeo import _tf1
+f = groups[0].formula; lo, hi = groups[0].rng
+_tf1.evaluate(f, [-320.0, 0.0])                  # TF1::Eval
+_tf1.generated_interval(f, lo, hi, 0.99)         # 99% of what GetRandom generates (Npx=100)
+_tf1.quantiles(f, lo, hi, [0.16, 0.5, 0.84])     # TF1::GetQuantiles on the Npx table
+_tf1.sample(f, lo, hi, 100000)                   # TF1::GetRandom
 ```
 
 Parsing utilities:

@@ -310,49 +310,18 @@ class FhiclParser:
 
 
 # ---------------------------------------------------------------------------
-# distrib_x helper
+# distrib_x/y/z: evaluated by ROOT (see _tf1), never translated
 # ---------------------------------------------------------------------------
 
-_TF1_MAP = [
-    ("TMath::Exp",   "np.exp"),
-    ("TMath::Abs",   "np.abs"),
-    ("TMath::Power", "np.power"),
-    ("TMath::Sqrt",  "np.sqrt"),
-    ("TMath::Log",   "np.log"),
-    ("TMath::Gaus",  "_gaus"),
-]
-
-
-def _gaus(x, mean=0.0, sigma=1.0):
-    return np.exp(-0.5 * ((x - mean) / sigma) ** 2)
-
-
-def eval_tf1(formula: str, x: np.ndarray) -> np.ndarray:
-    """
-    Evaluate a TF1 formula string (as in RadioGen/Decay0Gen ``distrib_x``) at
-    `x`, with negative values clipped to 0 (the generator samples it as a pdf).
-    Only the TMath functions in _TF1_MAP are translated.
-    """
-    expr = formula
-    for a, b in _TF1_MAP:
-        expr = expr.replace(a, b)
-    x = np.asarray(x, dtype=float)
-    f = eval(expr, {"__builtins__": {}, "np": np, "_gaus": _gaus, "x": x})   # noqa: S307
-    return np.clip(np.broadcast_to(f, x.shape).astype(float), 0, None)
-
-
 def x_interval(formula: str, x0: float, x1: float,
-               containment: float, npts: int = 400001) -> tuple:
-    """Shortest [a,b] ⊂ [x0,x1] containing `containment` fraction of the pdf."""
-    x = np.linspace(x0, x1, npts)
-    f = eval_tf1(formula, x)
-    c = np.concatenate([[0.0], np.cumsum(0.5 * (f[1:] + f[:-1]) * np.diff(x))])
-    c /= c[-1]
-    j  = np.searchsorted(c, c + containment)
-    ok = j < len(x)
-    i  = np.nonzero(ok)[0]
-    k  = np.argmin(x[j[ok]] - x[i])
-    return float(x[i[k]]), float(x[j[ok][k]])
+               containment: float, npx: int | None = None) -> tuple:
+    """Shortest [a,b] ⊂ [x0,x1] holding `containment` of the distribution:
+    the one GetRandom produces with `npx` points, or the formula pdf when
+    `npx` is None.  Needs PyROOT (raises _tf1.ROOTUnavailable)."""
+    from . import _tf1
+    if npx is None:
+        return _tf1.formula_interval(formula, x0, x1, containment)
+    return _tf1.generated_interval(formula, x0, x1, containment, npx)
 
 
 # ---------------------------------------------------------------------------
@@ -428,7 +397,8 @@ def _surface_label(lo: list, hi: list) -> str:
 
 
 def producer_volumes(name: str, cfg: dict, geo=None,
-                     xrange=None, containment: float = 0.99) -> list[dict]:
+                     xrange=None, containment: float = 0.99,
+                     npx: int = 100) -> list[dict]:
     """
     Extract emission volume rows from a single RadioGen/Decay0Gen config dict.
 
@@ -442,8 +412,10 @@ def producer_volumes(name: str, cfg: dict, geo=None,
       producer, module_type, index, source, nuclide, material,
       lo [x,y,z], hi [x,y,z], surface, T0, T1, BqPercc, rate, and per axis
       with a distribution: distrib_<ax>, <ax>_range (full box range on that
-      axis), <ax>_eff_range (effective range: containment interval; becomes lo/hi on that axis),
-      and eff_containment (the containment fraction used for the effective ranges)
+      axis), <ax>_eff_range (effective range: shortest interval holding
+      `containment` of the distribution TF1::GetRandom generates with `npx`
+      points; becomes lo/hi on that axis), <ax>_formula_eff_range (the same
+      for the formula pdf), eff_containment and eff_npx
     """
     mt   = cfg.get("module_type")
     rows = []
@@ -518,10 +490,12 @@ def producer_volumes(name: str, cfg: dict, geo=None,
             r[key] = cfg[key]
             if r["lo"] is not None and r["lo"][ax] is not None:
                 lo, hi = r["lo"][ax], r["hi"][ax]
-                a, b = x_interval(cfg[key], lo, hi, containment)
+                a, b = x_interval(cfg[key], lo, hi, containment, npx)
                 r[f"{axis}_range"] = [lo, hi]     # range distrib_<ax> is sampled over
-                r[f"{axis}_eff_range"] = [a, b]   # effective range: shortest containment interval
-                r["eff_containment"] = containment  # fraction of the pdf in the eff range
+                r[f"{axis}_eff_range"] = [a, b]   # effective range of what GetRandom generates
+                r[f"{axis}_formula_eff_range"] = list(x_interval(cfg[key], lo, hi, containment))
+                r["eff_containment"] = containment  # fraction of the distribution in the eff range
+                r["eff_npx"] = npx                  # TF1 Npx the generated distribution assumes
                 r["lo"] = r["lo"][:ax] + [a] + r["lo"][ax + 1:]
                 r["hi"] = r["hi"][:ax] + [b] + r["hi"][ax + 1:]
 

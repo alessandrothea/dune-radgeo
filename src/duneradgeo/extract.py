@@ -14,6 +14,9 @@ If a FCL file is given:
     and each producer's full FHiCL table → the IR's top-level "producers"
   * the GDML filename is extracted from AuxDetGeometry.GDML and used to
     populate anode / opdet / cathode / fieldshaper / struct volumes as well.
+  * producers with distrib_x/y/z: the formulas are evaluated with ROOT (TF1),
+    so PyROOT is required; the box on that axis becomes the effective range
+    of the distribution TF1::GetRandom generates (--npx, --containment).
 
 The refactored and the ggd-generated VD GDMLs use the same volume names but
 nest the cryostat differently (ggd adds volSupportEnc/volEnclosureCryostat),
@@ -48,6 +51,7 @@ from ._draw import box_corners_world
 from ._fcl import (FhiclParser, default_fcl_cache_dir, expand_fcl,
                    producer_volumes, select_producers)
 from ._gdml import BACKENDS, GeometryBase, load_geometry
+from ._tf1 import GENERATOR_NPX, ROOTUnavailable
 from ._profiles import detect_profile, get_profile, profile_detector
 from ._search import gdml_from_fcl, resolve_search_path
 from .ir import IRCollection, VolumeEntry
@@ -183,7 +187,8 @@ def _fcl_radio_volumes(doc: dict,
                        prefix: str = "",
                        all_configured: bool = False,
                        select_re: str | None = None,
-                       containment: float = 0.99) -> tuple[list[VolumeEntry], dict]:
+                       containment: float = 0.99,
+                       npx: int = 100) -> tuple[list[VolumeEntry], dict]:
     """Build radio VolumeEntry rows from an already-parsed FCL document.
 
     Returns (entries, producers): the rows, and the full FHiCL table of every
@@ -197,7 +202,9 @@ def _fcl_radio_volumes(doc: dict,
     for name in labels:
         try:
             rows = producer_volumes(name, table[name],
-                                    geo=geo, containment=containment)
+                                    geo=geo, containment=containment, npx=npx)
+        except ROOTUnavailable as exc:
+            sys.exit(f"[error] {name}: {exc}")
         except Exception as exc:
             print(f"[warn] {name}: {exc}", file=sys.stderr)
             continue
@@ -215,9 +222,10 @@ def _fcl_radio_volumes(doc: dict,
             meta = {k: r.get(k) for k in
                     ("source", "node", "nuclide", "module_type", "BqPercc",
                      "rate", "surface", "T0", "T1",
-                     "distrib_x", "x_range", "x_eff_range",
-                     "distrib_y", "y_range", "y_eff_range",
-                     "distrib_z", "z_range", "z_eff_range", "eff_containment")
+                     "distrib_x", "x_range", "x_eff_range", "x_formula_eff_range",
+                     "distrib_y", "y_range", "y_eff_range", "y_formula_eff_range",
+                     "distrib_z", "z_range", "z_eff_range", "z_formula_eff_range",
+                     "eff_containment", "eff_npx")
                     if r.get(k) is not None}
             meta["index"] = r["index"]
             entries.append(VolumeEntry(kind="radio", name=name,
@@ -273,7 +281,13 @@ def main() -> None:
     ap.add_argument("--all-configured", action="store_true",
                     help="include producers not on any trigger path")
     ap.add_argument("--containment",    type=float, default=0.99,
-                    help="distrib_x/y/z containment fraction (default 0.99)")
+                    help="distrib_x/y/z containment fraction for the effective "
+                         "range (default 0.99)")
+    ap.add_argument("--npx",            type=int, default=GENERATOR_NPX,
+                    help="TF1 Npx of the generator: the effective range is that of "
+                         "the distribution TF1::GetRandom draws from an Npx-point "
+                         "table; larsimrad BaseRadioGen keeps ROOT's default "
+                         "(default: %(default)s)")
     ap.add_argument("--no-geometry",    action="store_true",
                     help="skip GDML parsing even when a FCL is given")
     ap.add_argument("--gdml",           default=None,
@@ -363,6 +377,7 @@ def main() -> None:
             all_configured=args.all_configured,
             select_re=args.select,
             containment=args.containment,
+            npx=args.npx,
         )
         entries += radio
 
