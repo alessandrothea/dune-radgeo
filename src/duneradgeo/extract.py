@@ -18,7 +18,7 @@ From a FCL file (#includes expanded by fhicl-dump, else via $FHICL_FILE_PATH):
     --containment; see duneradgeo._tf1).
 
 --frame expresses every volume in the frame of one singly placed volume and
-records its world placement in the IR: the refactored and the ggd-generated
+records its world placement in the IR: the perl and the ggd
 VD GDMLs nest the cryostat differently (a global offset), so their IRs in
 the frame of volEnclosureTPC overlay.  --with-passive adds the profile's
 passive material (steel shell, insulation, support, shielding, cavern) as

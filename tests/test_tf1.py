@@ -134,8 +134,8 @@ def test_cache_and_ownership():
 
 
 if __name__ == "__main__":
-    import ROOT
-    print("ROOT", ROOT.gROOT.GetVersion())
+    from duneradgeo._root import import_root
+    print("ROOT", import_root("tests/test_tf1.py").gROOT.GetVersion())
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):
             setup_function(fn)
