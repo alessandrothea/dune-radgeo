@@ -23,6 +23,10 @@ records its world placement in the IR, so IRs of both kinds overlay.
 --with-passive adds the profile's passive material (steel shell, insulation,
 support structure, shielding, cavern) as struct volumes.
 
+--gdml-backend root reads the GDML with ROOT (TGeoManager::Import) instead
+of the built-in parser; both feed the same search, so IRs from the two
+backends can be compared with scripts/compare_ir.py.
+
 Non-box solids are approximated by boxes: tubes and tori by their bounding
 box, unions by one box per operand (e.g. each straight tube and corner of a
 field-shaper ring), subtractions by their outer (first) operand.
@@ -43,7 +47,7 @@ import numpy as np
 from ._draw import box_corners_world
 from ._fcl import (FhiclParser, default_fcl_cache_dir, expand_fcl,
                    producer_volumes, select_producers)
-from ._gdml import GDMLGeometry
+from ._gdml import BACKENDS, GeometryBase, load_geometry
 from ._profiles import detect_profile, get_profile, profile_detector
 from ._search import gdml_from_fcl, resolve_search_path
 from .ir import IRCollection, VolumeEntry
@@ -60,11 +64,15 @@ def _gdml_volumes(gdml_path: Path,
                   cathode_pats: list[str] | None = None,
                   fieldshaper_pats: list[str] | None = None,
                   passive: bool = False,
-                  verbose: bool = False) -> tuple[list[VolumeEntry], str, GDMLGeometry]:
+                  verbose: bool = False,
+                  backend: str = "python") -> tuple[list[VolumeEntry], str, GeometryBase]:
     """Parse a GDML and return (entries, detector_key, geo)."""
-    print(f"[info] parsing {gdml_path.name} …", file=sys.stderr)
+    print(f"[info] parsing {gdml_path.name} ({backend} backend) …", file=sys.stderr)
     t0  = time.time()
-    geo = GDMLGeometry(str(gdml_path))
+    try:
+        geo = load_geometry(str(gdml_path), backend=backend, verbose=verbose)
+    except RuntimeError as exc:
+        sys.exit(f"[error] {exc}")
     print(f"[info] {len(geo.volume_names)} logical volumes  ({time.time()-t0:.1f}s)",
           file=sys.stderr)
 
@@ -135,7 +143,7 @@ def _gdml_volumes(gdml_path: Path,
     return entries, profile_detector(profile_key), geo
 
 
-def _to_frame(entries: list[VolumeEntry], geo: GDMLGeometry, volume: str) -> dict:
+def _to_frame(entries: list[VolumeEntry], geo: GeometryBase, volume: str) -> dict:
     """Re-express `entries` (world frame) in the frame of `volume`, in place.
 
     `volume` must be placed exactly once.  Returns the IR frame record."""
@@ -171,7 +179,7 @@ def _parse_fcl(fcl_path: Path, cache_dir: str | None = None) -> tuple[dict, list
 
 def _fcl_radio_volumes(doc: dict,
                        top_order: list,
-                       geo: GDMLGeometry | None = None,
+                       geo: GeometryBase | None = None,
                        prefix: str = "",
                        all_configured: bool = False,
                        select_re: str | None = None,
@@ -270,6 +278,10 @@ def main() -> None:
                     help="skip GDML parsing even when a FCL is given")
     ap.add_argument("--gdml",           default=None,
                     help="override GDML path (when input is FCL)")
+    ap.add_argument("--gdml-backend",   choices=BACKENDS, default="python",
+                    help="GDML reader: the pure-Python parser, or ROOT's "
+                         "TGeoManager::Import (needs ROOT with TGeo/GDML, "
+                         "e.g. in the dunesw container) (default: %(default)s)")
     ap.add_argument("--fcl-cache",      default=default_fcl_cache_dir(), metavar="DIR",
                     help="directory where expanded FCL files are cached and "
                          "reused across runs (default: %(default)s)")
@@ -320,7 +332,7 @@ def main() -> None:
             gdml_path = inp  # input is already GDML
 
     # ---- Parse GDML (shared by detector volumes and FCL radio resolution) ----
-    geo: GDMLGeometry | None = None
+    geo: GeometryBase | None = None
     if gdml_path is not None:
         struct_pats = (
             [f"^{n}$" for n in args.struct] if args.struct
@@ -335,6 +347,7 @@ def main() -> None:
             fieldshaper_pats=args.fieldshaper_pattern,
             passive=args.with_passive,
             verbose=args.verbose,
+            backend=args.gdml_backend,
         )
         entries += geo_entries
         if not is_fcl:

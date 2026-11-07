@@ -10,6 +10,8 @@ Inspect DUNE background sources without a LArSoft environment:
   producers, drawn over the range the generator samples
 
 Pure Python (NumPy + Matplotlib + Plotly), no PyROOT or LArSoft required.
+Optionally, the GDML can be read with ROOT instead of the built-in parser
+(see [GDML backends](#gdml-backends)).
 
 ---
 
@@ -17,8 +19,18 @@ Pure Python (NumPy + Matplotlib + Plotly), no PyROOT or LArSoft required.
 
 ```bash
 cd dune-radgeo
-uv sync                  # or: pip install .   — everything
+uv sync                  # everything, including ROOT (pip wheel, Python 3.14)
+uv sync --no-group root  # everything but ROOT
+pip install .            # everything but ROOT
 ```
+
+ROOT is only needed for `bki-extract --gdml-backend root`.  It is a uv
+dependency group installed by default, not a package dependency, so `pip`
+never installs it: in a dunesw area the stack's ROOT is used and is not
+shadowed by the pip wheel.  The `root` pip wheels exist for CPython 3.14
+only (the group is skipped on older Pythons), and the current ones
+(0.1a12) are built without TGeo/GDML, so for now `--gdml-backend root`
+works only with a full ROOT such as the dunesw one.
 
 `bki-extract` itself needs only NumPy.  For an extraction-only install,
 e.g. on top of a LArSoft Python that already provides NumPy, skip the
@@ -34,6 +46,7 @@ pip install --no-deps .          # add numpy if the environment lacks it
 | `matplotlib` | `bki-plot` and `bki-distrib` PDF/PNG output, `plot_ir` |
 | `plotly` | `make_figure` |
 | `jupyter`, `nbconvert` | `nb_B.ipynb`, `scripts/run_notebook.py` |
+| `root` (group, optional) | `bki-extract --gdml-backend root`, `scripts/compare_backends.py` (needs TGeo/GDML) |
 
 In a `--no-deps` install, rendering a plot without matplotlib stops with an
 `ImportError` that says what to install.
@@ -61,6 +74,10 @@ build". The UPS product `python_future_six_request` puts pip 21.2.4 on
 
 Without installing anything, you can also run from the source tree:
 `dsw -C <area> exec env PYTHONPATH=/path/to/dune-radgeo/src python -m duneradgeo.extract ...`.
+
+The area's ROOT has TGeo/GDML, so `--gdml-backend root` and
+`scripts/compare_backends.py` work there (`dsw -C <area> exec bki-extract
+geometry.gdml -o /abs/ir.json --gdml-backend root`).
 
 `bki-plot` and `bki-distrib` plots need matplotlib, which the area does not
 have: plot the JSON on the host with `uv run bki-plot` / `uv run bki-distrib`.
@@ -165,6 +182,9 @@ bki-extract <input> --out <ir.json>
   input               GDML geometry file or expanded FHiCL job file
 
   --gdml PATH         override the GDML path (when input is FCL)
+  --gdml-backend {python,root}
+                      GDML reader: built-in parser (default) or ROOT's
+                      TGeoManager::Import (see GDML backends)
   --no-geometry       skip GDML parsing (radio volume_rand/gen stay unresolved)
 
   --anode-pattern P   regex(es) for anode volume names   (auto-detected)
@@ -440,6 +460,40 @@ python scripts/compare_ir.py ref.json ggd.json -v     # exit status 1 if any gro
 # ggd only: cryostat shell, insulation, I-beams, belts, shielding, cavern
 bki-extract dunevd10kt_v7_full10kt_ggd.gdml -o ggd_passive.json --with-passive
 ```
+
+### GDML backends
+
+`--gdml-backend` picks how the GDML is read:
+
+| Backend | Reader | Needs |
+|---------|--------|-------|
+| `python` (default) | built-in XML parser (`GDMLGeometry`) | NumPy |
+| `root` | `TGeoManager::Import` (`RootGDMLGeometry`) | ROOT with TGeo/GDML (dunesw) |
+
+Both fill the same tables (volumes and placements, box/tube/torus bounding
+boxes, boolean operands) and share the search, so placement paths, physvol
+names, frames and box decomposition are identical; only the parsing
+differs.  ROOT evaluates GDML expressions and units itself and computes
+each solid's bounding box.  Solids other than box, tube, torus and their
+booleans are skipped by both.  Reading with ROOT takes a few seconds
+instead of a fraction of one.
+
+`scripts/compare_backends.py` loads one or more GDMLs with both backends
+and compares volumes, solid tables and every profile placement (paired by
+path), exiting with status 1 on a difference:
+
+```bash
+dsw -C <area> py /path/to/dune-radgeo/scripts/compare_backends.py geometry.gdml [more.gdml] [-v]
+
+# or through the IR
+dsw -C <area> exec bki-extract geometry.gdml -o /abs/py.json --gdml-backend python
+dsw -C <area> exec bki-extract geometry.gdml -o /abs/rt.json --gdml-backend root
+dsw -C <area> exec python /path/to/dune-radgeo/scripts/compare_ir.py /abs/py.json /abs/rt.json
+```
+
+The two backends agree exactly on the VD refactored (2x8x40, 1x8x14 v5
+and v7a), VD ggd (with and without wires) and HD refactored (1x2x6)
+geometries.
 
 ### Inspecting an IR
 

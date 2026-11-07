@@ -1,6 +1,7 @@
 """duneradgeo: inspect DUNE detector geometry and radiological volumes."""
 from .ir import IRCollection, VolumeEntry
-from ._gdml import GDMLGeometry
+from ._gdml import BACKENDS, GDMLGeometry, GeometryBase, load_geometry
+from ._gdml_root import RootGDMLGeometry
 from ._fcl import FhiclParser
 from ._profiles import PROFILES, detect_profile, get_profile
 from ._search import resolve_search_path, gdml_from_fcl
@@ -9,6 +10,10 @@ __all__ = [
     "IRCollection",
     "VolumeEntry",
     "GDMLGeometry",
+    "GeometryBase",
+    "RootGDMLGeometry",
+    "load_geometry",
+    "BACKENDS",
     "FhiclParser",
     "PROFILES",
     "detect_profile",

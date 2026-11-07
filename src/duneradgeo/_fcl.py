@@ -434,7 +434,7 @@ def producer_volumes(name: str, cfg: dict, geo=None,
 
     Parameters
     ----------
-    geo : GDMLGeometry | None
+    geo : GeometryBase | None (either GDML backend)
         When provided, used to resolve ``volume_rand`` and ``volume_gen``
         entries to world-frame bounding boxes.
 

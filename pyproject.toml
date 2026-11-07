@@ -7,6 +7,7 @@ authors = [
     { name = "Alessandro Thea", email = "alessandro.thea@cern.ch" }
 ]
 requires-python = ">=3.9"
+
 # Full install: bki-extract, bki-plot and the notebook.
 # bki-extract alone needs only numpy: pip install --no-deps . numpy
 dependencies = [
@@ -16,6 +17,17 @@ dependencies = [
     "jupyter",     # notebooks/nb_B.ipynb, scripts/run_notebook.py
     "nbconvert",
 ]
+
+# ROOT for bki-extract --gdml-backend root.  A dependency group, not a
+# package dependency: `uv sync` installs it by default (see default-groups),
+# `uv sync --no-group root` skips it, and `pip install .` never installs it,
+# so in the dunesw container the UPS ROOT is used and never shadowed.
+# The pip wheels exist for CPython 3.14 only, hence the marker.
+[dependency-groups]
+root = ["root>=0.1a12; python_version >= '3.14'"]
+
+[tool.uv]
+default-groups = ["root"]
 
 [project.scripts]
 bki-extract = "duneradgeo.extract:main"
