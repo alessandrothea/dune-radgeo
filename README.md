@@ -1052,7 +1052,7 @@ Both mirror LArSoft's `cet::search_path` behaviour (first-match-wins).
 Each file runs on its own or under pytest (not a dependency).  On the host:
 
 ```bash
-.venv/bin/python tests/test_fcl.py        # prints ok / xfail per test
+.venv/bin/python tests/test_fcl.py        # prints ok per test
 .venv/bin/python -m pytest tests/          # if pytest is installed
 ```
 
@@ -1063,8 +1063,7 @@ Python and ROOT:
 dsw -C <area> py tests/test_tf1.py
 ```
 
-Tests marked xfail check the correct behaviour where the code is known to
-differ (e.g. a Decay0Gen `decay_chain` ignored for an explicit X0..Z1
-box): each documents a known issue, with the reason in
-its `@xfail(...)`.  Run directly, they are skipped and listed as `xfail`;
-under pytest they run as expected failures.
+A known issue can be recorded as a test of the correct behaviour marked
+`@xfail("reason")` (from `tests/_runner.py`); none is open at present.  Run
+directly, such tests are skipped and listed as `xfail`; under pytest they
+run as expected failures.
