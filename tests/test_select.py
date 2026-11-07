@@ -14,7 +14,7 @@ import sys
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _runner import run_tests, xfail  # noqa: E402
+from _runner import run_tests  # noqa: E402
 
 from duneradgeo._select import (  # noqa: E402
     highlight_groups, match_highlight, parse_highlight_spec, parse_pick_spec,
@@ -214,8 +214,6 @@ def test_highlight_bad_specs():
         raise AssertionError(f"{spec}: no re.error")
 
 
-@xfail("the LABEL is stripped but the NAME_RE after '=' is not: 'grp = ^K42' "
-       "compiles ' ^K42' (leading space), which matches no volume")
 def test_highlight_label_spaces_around_equals():
     label, name_re, _, _ = parse_highlight_spec("grp = ^K42")
     assert label == "grp"
@@ -408,9 +406,6 @@ def test_select_filters_compose():
     assert got == [("volAnodePlate", f"{_CRYO}/volAnodePlate:0"), ("K42Gen", 3)], got
 
 
-@xfail("_picked short-circuits with any(): an index spec naming a geometry "
-       "volume raises only if an earlier spec for that name did not already "
-       "select it, so the error depends on the spec order")
 def test_select_index_on_geometry_raises_any_order():
     for picks in (["^volCathodeGrid#0", "^volCathodeGrid#@Cathode"],   # raises
                   ["^volCathodeGrid#@Cathode", "^volCathodeGrid#0"]):  # does not
@@ -422,10 +417,6 @@ def test_select_index_on_geometry_raises_any_order():
             raise AssertionError(f"picks={picks}: no ValueError")
 
 
-@xfail("a bad --name / kind (--anode, --radio, ...) regex raises re.error from "
-       "select_volumes, which validate_picks does not check and the CLIs' "
-       "'except ValueError' does not catch: bki-plot --name '(' --list and "
-       "bki-distrib --radio '(' end in a traceback")
 def test_select_bad_name_regex_is_value_error():
     for kw in (dict(name_patterns=["("]), dict(kind_patterns={"radio": ["("]})):
         try:

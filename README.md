@@ -748,7 +748,8 @@ bki-plot planes.json -L --kind struct --highlight '^volTPCPlaneU$#@_PV_Bot'
   `NAME_RE` highlights every placement of the matching volumes.  Unlike
   `--pick`, volumes not named by any spec are not highlighted.
 - `LABEL=` (letters, digits, spaces, `-`, `_`, …; no regex characters) names
-  the group in the legend; without it the spec itself is used.
+  the group in the legend; without it the spec itself is used.  Spaces
+  around the `=` are ignored (`grp = ^K42` is `grp=^K42`).
 - A volume matched by several specs belongs to the first one.
 - Highlighted boxes thinner than 0.4 % of an axis span in a 2D view (wire
   planes, X-ARAPUCAs seen edge-on) are drawn as lines so they stay visible.

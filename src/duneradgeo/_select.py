@@ -72,7 +72,8 @@ def parse_highlight_spec(spec: str) -> tuple:
     Returns (label, name_re, indices | None, match_re | None).
     """
     m = _LABEL_RE.match(spec)
-    label, body = (m.group(1).strip(), m.group(2)) if m else (spec, spec)
+    label, body = ((m.group(1).strip(), m.group(2).lstrip()) if m
+                   else (spec, spec))
     if "#" in body:
         return (label,) + parse_pick_spec(body)
     if not body:
@@ -133,7 +134,10 @@ def _picked(v: VolumeEntry, specs: list[tuple]) -> bool:
     applicable = [s for s in specs if s[0].search(v.name)]
     if not applicable:
         return True
-    return any(_spec_hits(v, indices, match) for _, indices, match in applicable)
+    # evaluate every spec (no short-circuit): an index selector on a geometry
+    # volume must raise whatever the spec order
+    hits = [_spec_hits(v, indices, match) for _, indices, match in applicable]
+    return any(hits)
 
 
 def match_highlight(v: VolumeEntry, specs: list[tuple]) -> int | None:
@@ -164,6 +168,13 @@ def highlight_groups(vols: list[VolumeEntry], highlight: list[str]) -> tuple:
     return [sp[0] for sp in specs], groups, context
 
 
+def _compile(pat: str) -> re.Pattern:
+    try:
+        return re.compile(pat)
+    except re.error as exc:
+        raise ValueError(f"bad regex '{pat}': {exc}") from None
+
+
 def select_volumes(
     ir: IRCollection,
     kinds: list[str] | None = None,
@@ -175,17 +186,18 @@ def select_volumes(
     """
     Apply the bki-plot selectors to ``ir.volumes`` (see
     :func:`duneradgeo.plot.plot_ir` for their meaning).
-    Raises ValueError when a pick spec cannot be applied to a volume.
+    Raises ValueError when a pick spec cannot be applied to a volume or a
+    name/kind pattern is not a valid regex.
     """
     vols = ir.volumes
     if kinds is not None:
         kind_set = set(kinds)
         vols = [v for v in vols if v.kind in kind_set]
     if name_patterns:
-        pats = [re.compile(p) for p in name_patterns]
+        pats = [_compile(p) for p in name_patterns]
         vols = [v for v in vols if any(p.search(v.name) for p in pats)]
     if kind_patterns:
-        compiled = {k: [re.compile(p) for p in ps]
+        compiled = {k: [_compile(p) for p in ps]
                     for k, ps in kind_patterns.items()}
         vols = [v for v in vols
                 if v.kind not in compiled
