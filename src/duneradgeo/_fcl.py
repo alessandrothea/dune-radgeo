@@ -310,20 +310,6 @@ class FhiclParser:
 
 
 # ---------------------------------------------------------------------------
-# distrib_x/y/z: evaluated by ROOT (see _tf1), never translated
-# ---------------------------------------------------------------------------
-
-def x_interval(formula: str, x0: float, x1: float,
-               containment: float, npx: int | None = None) -> tuple:
-    """Shortest [a,b] ⊂ [x0,x1] holding `containment` of the distribution:
-    the one GetRandom produces with `npx` points, or the formula pdf when
-    `npx` is None.  Needs PyROOT (raises _tf1.ROOTUnavailable)."""
-    if npx is None:
-        return _tf1.formula_interval(formula, x0, x1, containment)
-    return _tf1.generated_interval(formula, x0, x1, containment, npx)
-
-
-# ---------------------------------------------------------------------------
 # GDML-backed geometry resolution for volume_rand / volume_gen
 # ---------------------------------------------------------------------------
 
@@ -376,6 +362,19 @@ def _world_aabb_per_hit(geo, patterns: list[str]) -> list[tuple]:
 BOX_KEYS = ("X0", "X1", "Y0", "Y1", "Z0", "Z1")
 DISTRIB_AXES = ("x", "y", "z")
 DEFAULT_CONTAINMENT = 0.99   # fraction of a distrib_<ax> held by its effective range
+# per row, shared by its axes: the containment and the TF1 Npx the effective
+# ranges assume
+DISTRIB_COMMON = ("distrib_eff_containment", "distrib_eff_npx")
+
+
+def distrib_keys(axis: str) -> dict:
+    """The row / IR meta keys of one distrib axis: the formula, the range it
+    is sampled over, and the effective ranges of the generated distribution
+    and of the formula."""
+    return {"formula":     f"distrib_{axis}",
+            "range":       f"distrib_{axis}_range",
+            "eff":         f"distrib_{axis}_eff_range",
+            "formula_eff": f"distrib_{axis}_formula_eff_range"}
 RADIO_MODULES = ("RadioGen", "Decay0Gen")
 
 
@@ -394,6 +393,34 @@ def _surface_label(lo: list, hi: list) -> str:
     if ext[ax] < 0.05 * other[0]:
         return f"plane_{'xyz'[ax]}@{0.5 * (lo[ax] + hi[ax]):g}"
     return "bulk"
+
+
+def _apply_distrib(rows: list[dict], cfg: dict, containment: float, npx: int) -> None:
+    """Add the distrib_<ax> keys of `cfg` to `rows`, in place, and narrow each
+    row's box on that axis to the effective range.
+
+    BaseRadioGen (larsimrad) samples each axis independently: distrib_<ax> is a
+    1D TF1 in the variable x, drawn with GetRandom over the box range on that
+    axis (X0..X1, the volume_rand bounding box, or the volume_gen node's box).
+    Needs PyROOT (raises ROOTUnavailable)."""
+    for ax, axis in enumerate(DISTRIB_AXES):
+        keys = distrib_keys(axis)
+        if keys["formula"] not in cfg:
+            continue
+        formula = cfg[keys["formula"]]
+        for r in rows:
+            r[keys["formula"]] = formula
+            if r["lo"] is not None and r["lo"][ax] is not None:
+                lo, hi = r["lo"][ax], r["hi"][ax]
+                d = _tf1.distribution(formula, lo, hi, npx)
+                a, b = d.interval(containment)
+                r[keys["range"]] = [lo, hi]            # range distrib_<ax> is sampled over
+                r[keys["eff"]] = [a, b]                # effective range of what GetRandom generates
+                r[keys["formula_eff"]] = list(d.formula_interval(containment))
+                r[DISTRIB_COMMON[0]] = containment     # fraction of the distribution in the eff range
+                r[DISTRIB_COMMON[1]] = npx             # TF1 Npx the generated distribution assumes
+                r["lo"] = r["lo"][:ax] + [a] + r["lo"][ax + 1:]
+                r["hi"] = r["hi"][:ax] + [b] + r["hi"][ax + 1:]
 
 
 def producer_volumes(name: str, cfg: dict, geo=None,
@@ -476,25 +503,7 @@ def producer_volumes(name: str, cfg: dict, geo=None,
         for r in rows:
             r.setdefault("nuclide", iso)
 
-    # BaseRadioGen (larsimrad) samples each axis independently: distrib_<ax> is a
-    # 1D TF1 in the variable x, drawn with GetRandom over the box range on that
-    # axis (X0..X1, the volume_rand bounding box, or the volume_gen node's box).
-    for ax, axis in enumerate(DISTRIB_AXES):
-        key = f"distrib_{axis}"
-        if key not in cfg:
-            continue
-        for r in rows:
-            r[key] = cfg[key]
-            if r["lo"] is not None and r["lo"][ax] is not None:
-                lo, hi = r["lo"][ax], r["hi"][ax]
-                a, b = x_interval(cfg[key], lo, hi, containment, npx)
-                r[f"distrib_{axis}_range"] = [lo, hi]     # range distrib_<ax> is sampled over
-                r[f"distrib_{axis}_eff_range"] = [a, b]   # effective range of what GetRandom generates
-                r[f"distrib_{axis}_formula_eff_range"] = list(x_interval(cfg[key], lo, hi, containment))
-                r["distrib_eff_containment"] = containment  # fraction of the distribution in the eff range
-                r["distrib_eff_npx"] = npx                  # TF1 Npx the generated distribution assumes
-                r["lo"] = r["lo"][:ax] + [a] + r["lo"][ax + 1:]
-                r["hi"] = r["hi"][:ax] + [b] + r["hi"][ax + 1:]
+    _apply_distrib(rows, cfg, containment, npx)
 
     for r in rows:
         if r["lo"] is not None and None not in r["lo"]:

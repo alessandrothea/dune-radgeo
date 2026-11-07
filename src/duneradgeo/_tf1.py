@@ -6,12 +6,17 @@ itself, never translated.  The TF1 is built as larsimrad's BaseRadioGen does,
 ``GetRandom(lo, hi)``.  GetRandom samples from a cumulative table of ``Npx``
 points (BaseRadioGen keeps ROOT's default, 100) with a parabolic interpolation
 inside each bin, so for a feature narrower than (hi - lo) / Npx the generated
-distribution differs from the formula.  Two descriptions are provided:
+distribution differs from the formula.  A :class:`Distribution` (one formula
+on one range with one Npx, best obtained from the cached factory
+:func:`distribution`) describes both:
 
-* the formula: :func:`evaluate`, :func:`formula_interval`;
-* the generated distribution: :func:`quantiles` (TF1::GetQuantiles, ROOT's
-  own table, deterministic), :func:`generated_cdf`, :func:`generated_pdf`,
-  :func:`generated_interval`, and :func:`sample` (TF1::GetRandom).
+* the formula: :meth:`~Distribution.eval`, :meth:`~Distribution.formula_pdf`,
+  :meth:`~Distribution.formula_interval`, :meth:`~Distribution.formula_fraction`;
+* the generated distribution: :meth:`~Distribution.quantiles`
+  (TF1::GetQuantiles, ROOT's own table, deterministic),
+  :meth:`~Distribution.cdf`, :meth:`~Distribution.pdf`,
+  :meth:`~Distribution.interval`, and :meth:`~Distribution.sample`
+  (TF1::GetRandom).
 
 Not modelled: the generator also redraws points that land outside the
 volumes allowed by volume_gen / material (e.g. the gas above the liquid).
@@ -21,14 +26,23 @@ UPS ROOT of a dunesw area.  TF1 is in ROOT's core, so any build will do.
 """
 from __future__ import annotations
 
-import warnings
+import functools
+import itertools
+from functools import cached_property
 
 import numpy as np
 
+from ._root import import_root
+
 GENERATOR_NPX = 100      # ROOT's TF1 default, kept by BaseRadioGen (no SetNpx)
 
-_ROOT = None
-_CACHE: dict = {}
+_FORMULA_GRID = 400001   # points of the dense formula grid: TF1::Integral misses
+                         # peaks much narrower than the range
+_CDF_TABLE = 20001       # probabilities at which the GetRandom CDF is tabulated
+_SEED = 12345            # gRandom seed of Distribution.sample
+
+_names = itertools.count()     # TF1 names: unique for the life of the process
+_declared = False
 _HELPERS = r"""
 #include "TF1.h"
 namespace duneradgeo_tf1 {
@@ -42,74 +56,25 @@ void sample(TF1& f, double lo, double hi, double* out, long n) {
 """
 
 
-class ROOTUnavailable(RuntimeError):
-    """PyROOT cannot be imported: distrib_* formulas cannot be evaluated."""
-
-
 def _root():
-    global _ROOT
-    if _ROOT is None:
-        with warnings.catch_warnings():
-            # the root pip wheel warns that it is an alpha release on import
-            warnings.filterwarnings("ignore", message=r"(?s).*alpha stage")
-            try:
-                import ROOT
-            except ImportError as exc:
-                raise ROOTUnavailable(
-                    "distrib_x/y/z formulas are evaluated with ROOT, but PyROOT "
-                    "cannot be imported: use the dune-radgeo venv (uv sync, "
-                    "dependency group 'root') or a dunesw area") from exc
-        ROOT.gROOT.SetBatch(True)
+    """ROOT, with the C++ loops of _HELPERS declared."""
+    global _declared
+    ROOT = import_root("evaluating the distrib_x/y/z formulas")
+    if not _declared:
         ROOT.gInterpreter.Declare(_HELPERS)
-        _ROOT = ROOT
-    return _ROOT
+        _declared = True
+    return ROOT
 
 
-def tf1(formula: str, lo: float, hi: float, npx: int = GENERATOR_NPX):
-    """The TF1 for `formula` on [lo, hi] with `npx` points (cached).
-
-    Raises ValueError when ROOT cannot parse the formula."""
-    key = (formula, float(lo), float(hi), int(npx))
-    f = _CACHE.get(key)
-    if f is None:
-        ROOT = _root()
-        f = ROOT.TF1(f"duneradgeo_tf1_{len(_CACHE)}", formula, float(lo), float(hi))
-        if not f.IsValid():
-            raise ValueError(f"ROOT cannot parse the formula {formula!r}")
-        f.SetNpx(int(npx))     # explicit, so the result does not depend on ROOT's default
-        _CACHE[key] = f
-    return f
-
-
-# ---- the formula ----------------------------------------------------------
-
-def evaluate(formula: str, x) -> np.ndarray:
-    """TF1::Eval of `formula` at every point of `x` (raw values, not clipped)."""
-    x = np.ascontiguousarray(x, dtype=float)
-    y = np.empty_like(x)
-    if x.size:
-        lo, hi = float(x.min()), float(x.max())      # TF1::Eval ignores the range
-        f = tf1(formula, lo, hi if hi > lo else lo + 1.0)
-        _root().duneradgeo_tf1.eval(f, x, y, x.size)
-    return y
+def _trapezoids(f: np.ndarray, x: np.ndarray) -> np.ndarray:
+    """The trapezoid rule's terms for f over x: their sum is the integral,
+    their cumulative sum the running integral (np.trapz is gone in numpy 2,
+    np.trapezoid absent in 1.x)."""
+    return 0.5 * (f[1:] + f[:-1]) * np.diff(x)
 
 
 def _integrate(f: np.ndarray, x: np.ndarray) -> float:
-    """Trapezoid rule (np.trapz is gone in numpy 2, np.trapezoid absent in 1.x)."""
-    return float(np.sum(0.5 * (f[1:] + f[:-1]) * np.diff(x)))
-
-
-def formula_pdf(formula: str, lo: float, hi: float, npts: int = 400001) -> tuple:
-    """(x, pdf, norm): the formula on a dense grid over [lo, hi], negative
-    values clipped to 0, normalised to 1 over the range.  The integral is a
-    dense-grid trapezoid sum: TF1::Integral misses peaks much narrower than
-    the range."""
-    x = np.linspace(lo, hi, npts)
-    f = np.clip(evaluate(formula, x), 0, None)
-    norm = _integrate(f, x)
-    if not norm > 0:
-        raise ValueError("formula integrates to 0 over the range")
-    return x, f / norm, norm
+    return float(np.sum(_trapezoids(f, x)))
 
 
 def _shortest(xs: np.ndarray, cdf: np.ndarray, containment: float) -> tuple:
@@ -123,87 +88,144 @@ def _shortest(xs: np.ndarray, cdf: np.ndarray, containment: float) -> tuple:
     return float(xs[i[k]]), float(xs[j[ok][k]])
 
 
-def formula_interval(formula: str, lo: float, hi: float, containment: float,
-                     npts: int = 400001) -> tuple:
-    """Shortest [a, b] ⊂ [lo, hi] holding `containment` of the formula pdf."""
-    x, pdf, _ = formula_pdf(formula, lo, hi, npts)
-    c = np.concatenate([[0.0], np.cumsum(0.5 * (pdf[1:] + pdf[:-1]) * np.diff(x))])
-    return _shortest(x, c / c[-1], containment)
+class Distribution:
+    """distrib_<axis> `formula` on [lo, hi]: the formula itself, and what
+    TF1::GetRandom generates from it with an `npx`-point table.
+
+    Owns its TF1 (kept out of ROOT's global list of functions, so it is
+    deleted with this object and its name never clashes).  Raises ValueError
+    when ROOT cannot parse the formula, ROOTUnavailable without PyROOT."""
+
+    def __init__(self, formula: str, lo: float, hi: float, npx: int = GENERATOR_NPX):
+        ROOT = _root()
+        self.formula = str(formula)
+        self.lo, self.hi, self.npx = float(lo), float(hi), int(npx)
+        f = ROOT.TF1(f"duneradgeo_tf1_{next(_names)}", self.formula, self.lo, self.hi)
+        f.AddToGlobalList(False)      # owned by Python, not by gROOT
+        if not f.IsValid():
+            raise ValueError(f"ROOT cannot parse the formula {formula!r}")
+        f.SetNpx(self.npx)            # explicit, so the result does not depend on ROOT's default
+        self.tf1 = f
+
+    def __repr__(self) -> str:
+        return (f"Distribution({self.formula!r}, {self.lo!r}, {self.hi!r}, "
+                f"npx={self.npx})")
+
+    def with_npx(self, npx: int) -> "Distribution":
+        """The same formula and range with another Npx (cached)."""
+        return distribution(self.formula, self.lo, self.hi, npx)
+
+    # ---- the formula ------------------------------------------------------
+
+    def eval(self, x) -> np.ndarray:
+        """TF1::Eval at every point of `x` (raw values, not clipped; TF1::Eval
+        ignores the range)."""
+        x = np.ascontiguousarray(x, dtype=float)
+        y = np.empty_like(x)
+        if x.size:
+            _root().duneradgeo_tf1.eval(self.tf1, x, y, x.size)
+        return y
+
+    def _formula_grid(self) -> tuple:
+        """(x, f, norm): the formula on the dense grid over [lo, hi], negative
+        values clipped to 0, and its integral (trapezoid sum).  Not cached
+        (6 MB); the norm is."""
+        x = np.linspace(self.lo, self.hi, _FORMULA_GRID)
+        f = np.clip(self.eval(x), 0, None)
+        norm = _integrate(f, x)
+        if not norm > 0:
+            raise ValueError("formula integrates to 0 over the range")
+        return x, f, norm
+
+    @cached_property
+    def norm(self) -> float:
+        """Integral of the formula (clipped at 0) over [lo, hi] on the dense
+        grid.  Raises ValueError when it is 0."""
+        return self._formula_grid()[2]
+
+    def formula_pdf(self, x) -> np.ndarray:
+        """The formula at `x`, negative values clipped to 0, normalised to 1
+        over [lo, hi]."""
+        return np.clip(self.eval(x), 0, None) / self.norm
+
+    def formula_interval(self, containment: float) -> tuple:
+        """Shortest [a, b] ⊂ [lo, hi] holding `containment` of the formula pdf."""
+        x, f, norm = self._formula_grid()
+        c = np.concatenate([[0.0], np.cumsum(_trapezoids(f / norm, x))])
+        return _shortest(x, c / c[-1], containment)
+
+    def formula_fraction(self, a: float, b: float) -> float:
+        """Fraction of the formula pdf (normalised over [lo, hi]) inside
+        [a, b], integrated on its own grid over [a, b]."""
+        xa = np.linspace(a, b, _FORMULA_GRID)
+        return _integrate(np.clip(self.eval(xa), 0, None), xa) / self.norm
+
+    # ---- the generated distribution (TF1::GetRandom) ----------------------
+
+    def quantiles(self, p) -> np.ndarray:
+        """Quantiles of the GetRandom(lo, hi) distribution, from ROOT's own CDF
+        table (TF1::GetQuantiles): deterministic, no sampling.  `p` increasing
+        in [0, 1]."""
+        # GetQuantiles builds its table with max(Npx, 2 * len(p)) points, so ask for
+        # at most Npx / 2 probabilities per call to stay on GetRandom's Npx table.
+        p = np.ascontiguousarray(p, dtype=float)
+        q = np.empty_like(p)
+        step = max(1, self.npx // 2)
+        for i in range(0, p.size, step):
+            pc = np.ascontiguousarray(p[i:i + step])
+            qc = np.empty_like(pc)
+            self.tf1.GetQuantiles(pc.size, qc, pc)
+            q[i:i + step] = qc
+        return q
+
+    @cached_property
+    def _cdf_table(self) -> tuple:
+        """(q, p): the GetRandom CDF tabulated at _CDF_TABLE probabilities."""
+        p = np.linspace(0.0, 1.0, _CDF_TABLE)
+        q = np.maximum.accumulate(self.quantiles(p))   # guard rounding
+        return q, p
+
+    def cdf(self, x) -> np.ndarray:
+        """CDF of the GetRandom distribution at `x`."""
+        q, p = self._cdf_table
+        return np.interp(np.asarray(x, dtype=float), q, p, left=0.0, right=1.0)
+
+    def pdf(self, x) -> np.ndarray:
+        """Density of the GetRandom distribution at `x` [1/len], the derivative
+        of the tabulated CDF.  Normalised over [lo, hi], like :meth:`formula_pdf`."""
+        x = np.asarray(x, dtype=float)
+        xe = np.concatenate([[x[0]], 0.5 * (x[1:] + x[:-1]), [x[-1]]])
+        c = self.cdf(xe)
+        w = np.diff(xe)
+        return np.divide(np.diff(c), w, out=np.zeros_like(w), where=w > 0)
+
+    def interval(self, containment: float) -> tuple:
+        """Shortest [a, b] holding `containment` of the GetRandom distribution."""
+        q, p = self._cdf_table
+        return _shortest(q, p, containment)
+
+    def sample(self, n: int, seed: int = _SEED) -> np.ndarray:
+        """`n` positions drawn as the generator does, GetRandom(lo, hi), after
+        gRandom.SetSeed(seed)."""
+        ROOT = _root()
+        ROOT.gRandom.SetSeed(seed)
+        out = np.empty(int(n))
+        ROOT.duneradgeo_tf1.sample(self.tf1, self.lo, self.hi, out, out.size)
+        return out
 
 
-def formula_fraction(formula: str, lo: float, hi: float, a: float, b: float,
-                     npts: int = 400001) -> float:
-    """Fraction of the formula pdf (normalised over [lo, hi]) inside [a, b],
-    integrated on its own grid over [a, b]."""
-    _, _, norm = formula_pdf(formula, lo, hi, npts)
-    xa = np.linspace(a, b, npts)
-    return _integrate(np.clip(evaluate(formula, xa), 0, None), xa) / norm
+@functools.lru_cache(maxsize=256)
+def _cached(formula: str, lo: float, hi: float, npx: int) -> Distribution:
+    return Distribution(formula, lo, hi, npx)
 
 
-# ---- the generated distribution (TF1::GetRandom) --------------------------
-
-def quantiles(formula: str, lo: float, hi: float, p,
-              npx: int = GENERATOR_NPX) -> np.ndarray:
-    """Quantiles of the GetRandom(lo, hi) distribution, from ROOT's own CDF
-    table (TF1::GetQuantiles): deterministic, no sampling.  `p` increasing
-    in [0, 1]."""
-    # GetQuantiles builds its table with max(Npx, 2 * len(p)) points, so ask for
-    # at most Npx / 2 probabilities per call to stay on GetRandom's Npx table.
-    p = np.ascontiguousarray(p, dtype=float)
-    q = np.empty_like(p)
-    f = tf1(formula, lo, hi, npx)
-    step = max(1, int(npx) // 2)
-    for i in range(0, p.size, step):
-        pc = np.ascontiguousarray(p[i:i + step])
-        qc = np.empty_like(pc)
-        f.GetQuantiles(pc.size, qc, pc)
-        q[i:i + step] = qc
-    return q
+def distribution(formula: str, lo: float, hi: float,
+                 npx: int = GENERATOR_NPX) -> Distribution:
+    """The :class:`Distribution` of `formula` on [lo, hi] with `npx` points,
+    shared by every caller with the same arguments (the 256 most recent are
+    kept; ``distribution.cache_clear()`` drops them)."""
+    return _cached(str(formula), float(lo), float(hi), int(npx))
 
 
-_CDF: dict = {}
-
-
-def _cdf_table(formula: str, lo: float, hi: float, npx: int, n: int = 20001) -> tuple:
-    """(q, p): the GetRandom CDF tabulated at n probabilities (cached)."""
-    key = (formula, float(lo), float(hi), int(npx), n)
-    if key not in _CDF:
-        p = np.linspace(0.0, 1.0, n)
-        q = np.maximum.accumulate(quantiles(formula, lo, hi, p, npx))   # guard rounding
-        _CDF[key] = (q, p)
-    return _CDF[key]
-
-
-def generated_cdf(formula: str, lo: float, hi: float, x,
-                  npx: int = GENERATOR_NPX) -> np.ndarray:
-    """CDF of the GetRandom distribution at `x`."""
-    q, p = _cdf_table(formula, lo, hi, npx)
-    return np.interp(np.asarray(x, dtype=float), q, p, left=0.0, right=1.0)
-
-
-def generated_pdf(formula: str, lo: float, hi: float, x,
-                  npx: int = GENERATOR_NPX) -> np.ndarray:
-    """Density of the GetRandom distribution at `x` [1/len], the derivative of
-    the tabulated CDF.  Normalised over [lo, hi], like :func:`formula_pdf`."""
-    x = np.asarray(x, dtype=float)
-    xe = np.concatenate([[x[0]], 0.5 * (x[1:] + x[:-1]), [x[-1]]])
-    c = generated_cdf(formula, lo, hi, xe, npx)
-    w = np.diff(xe)
-    return np.divide(np.diff(c), w, out=np.zeros_like(w), where=w > 0)
-
-
-def generated_interval(formula: str, lo: float, hi: float, containment: float,
-                       npx: int = GENERATOR_NPX) -> tuple:
-    """Shortest [a, b] holding `containment` of the GetRandom distribution."""
-    q, p = _cdf_table(formula, lo, hi, npx)
-    return _shortest(q, p, containment)
-
-
-def sample(formula: str, lo: float, hi: float, n: int,
-           npx: int = GENERATOR_NPX, seed: int = 12345) -> np.ndarray:
-    """`n` positions drawn as the generator does, GetRandom(lo, hi)."""
-    ROOT = _root()
-    ROOT.gRandom.SetSeed(seed)
-    out = np.empty(int(n))
-    ROOT.duneradgeo_tf1.sample(tf1(formula, lo, hi, npx), float(lo), float(hi), out, out.size)
-    return out
+distribution.cache_clear = _cached.cache_clear
+distribution.cache_info = _cached.cache_info

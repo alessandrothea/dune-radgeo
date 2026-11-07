@@ -24,6 +24,15 @@ P = [0.005, 0.16, 0.50, 0.84]
 LAR_QUANTILES = [-323.07, -322.60, -321.42, -319.82]
 
 
+def setup_function(_fn=None):
+    """Each test builds its own Distributions."""
+    _tf1.distribution.cache_clear()
+
+
+def _d(formula, npx=_tf1.GENERATOR_NPX):
+    return _tf1.distribution(formula, LO, HI, npx)
+
+
 def test_formula_values():
     """TF1::Eval agrees with the closed forms."""
     x = np.linspace(LO, HI, 2001)
@@ -31,67 +40,97 @@ def test_formula_values():
     u = np.abs(325.0 - x)
     bulk = (10255.2 + 41.3788 * u - 0.135462 * u**2 + 0.000203379 * u**3
             - 1.14356e-7 * u**4)
-    assert np.allclose(_tf1.evaluate(MESH, x), mesh, rtol=1e-12)
-    assert np.allclose(_tf1.evaluate(BULK, x), bulk, rtol=1e-12)
+    assert np.allclose(_d(MESH).eval(x), mesh, rtol=1e-12)
+    assert np.allclose(_d(BULK).eval(x), bulk, rtol=1e-12)
 
 
 def test_invalid_formula():
     try:
-        _tf1.tf1("10*nosuchfunction(x)", LO, HI)
+        _tf1.distribution("10*nosuchfunction(x)", LO, HI)
     except ValueError:
         return
     raise AssertionError("an unparsable formula must raise ValueError")
 
 
 def test_narrow_peak_accepted():
-    """bki-distrib validates a formula by building its TF1: a peak much
-    narrower than the range is valid, although it vanishes at lo, mid and hi
-    (a 3-point integral of it is 0); its effective range comes from the dense
-    formula grid."""
-    narrow = "TMath::Gaus(x,100,1)"
-    _tf1.tf1(narrow, LO, HI)
-    form = _tf1.formula_interval(narrow, LO, HI, 0.99)
+    """bki-distrib validates a formula by its norm on the dense formula grid:
+    a peak much narrower than the range is valid, although it vanishes at lo,
+    mid and hi (a 3-point integral of it is 0); its effective range comes
+    from the same grid."""
+    d = _d("TMath::Gaus(x,100,1)")
+    assert d.norm > 0
+    form = d.formula_interval(0.99)
     assert np.allclose(form, (97.40, 102.55), atol=0.01), form
+
+
+def test_zero_norm_rejected():
+    """A formula that parses but vanishes on the range has no pdf."""
+    d = _d("0*x")
+    try:
+        d.norm
+    except ValueError:
+        return
+    raise AssertionError("a formula integrating to 0 must raise ValueError")
 
 
 def test_generated_matches_lar():
     """GetRandom's table (Npx = 100) reproduces the lar decay vertices."""
-    q = _tf1.quantiles(MESH, LO, HI, P)
+    q = _d(MESH).quantiles(P)
     assert np.allclose(q, LAR_QUANTILES, atol=0.02), q
 
 
 def test_quantile_batching():
     """Many probabilities give the same quantiles as a few: GetQuantiles
     would otherwise switch to a finer table (max(Npx, 2 * n) points)."""
-    many = _tf1.quantiles(MESH, LO, HI, np.linspace(0, 1, 2001))
-    few = _tf1.quantiles(MESH, LO, HI, P)
+    many = _d(MESH).quantiles(np.linspace(0, 1, 2001))
+    few = _d(MESH).quantiles(P)
     assert np.allclose(np.interp(P, np.linspace(0, 1, 2001), many), few, atol=0.01)
 
 
 def test_quantiles_match_sampling():
-    s = _tf1.sample(MESH, LO, HI, 1_000_000)
+    d = _d(MESH)
+    s = d.sample(1_000_000)
     assert np.allclose(np.percentile(s, [100 * p for p in P]),
-                       _tf1.quantiles(MESH, LO, HI, P), atol=0.02)
+                       d.quantiles(P), atol=0.02)
 
 
 def test_effective_ranges():
-    gen = _tf1.generated_interval(MESH, LO, HI, 0.99)
-    form = _tf1.formula_interval(MESH, LO, HI, 0.99)
+    d = _d(MESH)
+    gen = d.interval(0.99)
+    form = d.formula_interval(0.99)
     assert np.allclose(gen, (-323.082, -318.753), atol=0.005), gen
     assert np.allclose(form, (-321.704, -318.328), atol=0.005), form
-    c = _tf1.generated_cdf(MESH, LO, HI, list(gen))
+    c = d.cdf(list(gen))
     assert abs(c[1] - c[0] - 0.99) < 1e-3
-    assert abs(_tf1.formula_fraction(MESH, LO, HI, *form) - 0.99) < 1e-3
+    assert abs(d.formula_fraction(*form) - 0.99) < 1e-3
     # a fine table reproduces the formula
-    fine = _tf1.generated_interval(MESH, LO, HI, 0.99, npx=10000)
-    assert np.allclose(fine, form, atol=0.05), fine
+    fine = d.with_npx(10000)
+    assert fine.npx == 10000 and fine.tf1.GetNpx() == 10000
+    assert np.allclose(fine.interval(0.99), form, atol=0.05), fine.interval(0.99)
 
 
 def test_smooth_profile_unaffected():
     """For a smooth profile the Npx = 100 table makes no difference."""
-    gen = _tf1.generated_interval(BULK, LO, HI, 0.99)
-    form = _tf1.formula_interval(BULK, LO, HI, 0.99)
+    d = _d(BULK)
+    gen = d.interval(0.99)
+    form = d.formula_interval(0.99)
     assert np.allclose(gen, form, atol=0.01), (gen, form)
+
+
+def test_cache_and_ownership():
+    """distribution() shares one object per (formula, range, npx), however
+    the arguments are spelled; each owns a TF1 with a unique name that is
+    not in ROOT's global list, so evicted objects leave nothing behind."""
+    import ROOT
+    a = _tf1.distribution(MESH, LO, HI)
+    assert _tf1.distribution(MESH, np.float64(LO), HI, npx=100) is a
+    assert _tf1.distribution(MESH, LO, HI, 200) is not a
+    names = {_d(f"{k}+x").tf1.GetName() for k in range(5)}
+    assert len(names) == 5
+    assert not any(ROOT.gROOT.GetListOfFunctions().FindObject(n) for n in names)
+    _tf1.distribution.cache_clear()
+    assert _tf1.distribution(MESH, LO, HI) is not a
+    assert np.array_equal(a.quantiles(P), _d(MESH).quantiles(P))
 
 
 if __name__ == "__main__":
@@ -99,5 +138,6 @@ if __name__ == "__main__":
     print("ROOT", ROOT.gROOT.GetVersion())
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):
+            setup_function(fn)
             fn()
             print("ok  ", name)
