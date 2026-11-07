@@ -480,10 +480,11 @@ bki-extract prodbackground_radio.fcl -o radio.json --containment 0.95
 bki-extract prodbackground_radio.fcl -o radio.json --no-fcl-cache
 ```
 
-### Refactored vs ggd-generated VD geometries
+### perl vs ggd VD GDML
 
 Both GDML flavours use the same detector volume names (the ggd one is
-detected as profile `vd-ggd`, written to the IR as detector `vd`), and each
+detected as profile `vd-ggd`, the perl one as `vd-perl`; both are written to
+the IR as detector `vd`), and each
 geometry volume carries its placement `path` and, for ggd, its physvol name
 `pv`.  The ggd geometry nests the cryostat in `volSupportEnc` /
 `volEnclosureCryostat`, so world coordinates differ by a global offset:
@@ -908,13 +909,15 @@ from duneradgeo._fcl import expand_fcl
 
 ## Detector profiles
 
-Auto-detected from logical volume names (`vd-ggd` is recognised by
-`volSupportEnc` / `volEnclosureCryostat` and checked before `vd`):
+A profile is a detector plus a GDML flavour: `vd-perl` and `vd-ggd` are the
+same VD detector, described by perl- and ggd-generated GDML, and both write
+`"detector": "vd"` to the IR.  Auto-detected from logical volume names (`vd-ggd` is recognised by
+`volSupportEnc` / `volEnclosureCryostat` and checked before `vd-perl`):
 
 | Key  | Geometry | Anode | Opdet | Cathode | Field shaper | Default struct |
 |------|----------|-------|-------|---------|--------------|----------------|
-| `vd` | Vertical Drift (FD2) | `volAnodePlate`, `volAnodePlateBottom` | `volArapuca*` | `volCathodeGrid` (`volGroundGrid` in v4) | `volFieldShaper`, `volFieldShaperSlim` | `volTPCActive`, `volGaseousArgon`, `volTPC`, `volCryostat` |
-| `vd-ggd` | Vertical Drift (FD2), ggd-generated GDML; written to the IR as `vd` | as `vd` | as `vd` | `volCathodeGrid` | as `vd` | as `vd` |
+| `vd-perl` | Vertical Drift (FD2), perl GDML | `volAnodePlate`, `volAnodePlateBottom` | `volArapuca*` | `volCathodeGrid` (`volGroundGrid` in v4) | `volFieldShaper`, `volFieldShaperSlim` | `volTPCActive`, `volGaseousArgon`, `volTPC`, `volCryostat` |
+| `vd-ggd` | Vertical Drift (FD2), ggd GDML | as `vd-perl` | as `vd-perl` | `volCathodeGrid` | as `vd-perl` | as `vd-perl` |
 | `hd` | Horizontal Drift / ProtoDUNE-HD | `volAPAFrameYSide` | `volArapuca_N` | — | — | `volTPCActiveInner`, `volGaseousArgon`, `volTPC`, `volCryostat` |
 
 Override with `--anode-pattern` / `--opdet-pattern` / `--cathode-pattern` /
@@ -924,7 +927,7 @@ Override with `--anode-pattern` / `--opdet-pattern` / `--cathode-pattern` /
 
 | Key  | Passive volumes |
 |------|-----------------|
-| `vd` | `volSteelShell`, `volFoamPadding`, `volSteelSupport` |
+| `vd-perl` | `volSteelShell`, `volFoamPadding`, `volSteelSupport` |
 | `vd-ggd` | `volSteelShell`, `fShellLog`, `WoodLog`, `FoamLog`, `ShellOutLog` (cryostat and insulation); `IBeamTop/Bot/Side`, `BeltUni`, `BeltUniTop`, `BeltHoleUni` (support); `ShieldBlockContainerLog`, `boxshapeVol`, `boxshapeLeadVol` (shielding); `volShotbox`, `volGrout`, `volConcrete`, `volRadioRockShell` (cavern) |
 | `hd` | — |
 

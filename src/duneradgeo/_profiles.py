@@ -4,11 +4,13 @@ from __future__ import annotations
 _VD_STRUCT = [r"^volTPCActive$", r"^volGaseousArgon$", r"^volTPC$", r"^volCryostat$"]
 
 PROFILES: dict[str, dict] = {
-    # ggd-generated VD: same detector volume names as "vd", but the cryostat
-    # sits in volSupportEnc/volEnclosureCryostat, surrounded by passive
-    # material.  Checked before "vd", whose hint volume it also contains.
+    # Profiles are per detector and GDML flavour (perl- or ggd-generated);
+    # "detector" is what goes into the IR.  VD, ggd GDML: same detector volume
+    # names as the perl GDML, but the cryostat sits in
+    # volSupportEnc/volEnclosureCryostat, surrounded by passive material.
+    # Checked before "vd-perl", whose hint volume it also contains.
     "vd-ggd": {
-        "label": "VD (Vertical Drift, ggd)",
+        "label": "VD (Vertical Drift), ggd GDML",
         "detector": "vd",
         "anode_patterns":  [r"^volAnodePlate$", r"^volAnodePlateBottom$"],
         "opdet_patterns":  [r"^volArapuca"],
@@ -24,8 +26,10 @@ PROFILES: dict[str, dict] = {
                              r"^volRadioRockShell$"],
         "hint_vols": {"volSupportEnc", "volEnclosureCryostat"},
     },
-    "vd": {
-        "label": "VD (Vertical Drift)",
+    # VD, perl GDML
+    "vd-perl": {
+        "label": "VD (Vertical Drift), perl GDML",
+        "detector": "vd",
         "anode_patterns":  [r"^volAnodePlate$", r"^volAnodePlateBottom$"],
         "opdet_patterns":  [r"^volArapuca"],
         # v5+ name; v4 geometries call the same CathodeGrid solid volGroundGrid
