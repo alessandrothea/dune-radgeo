@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import sys
 from collections import defaultdict
+from typing import Any, NamedTuple
 from pathlib import Path
 
 import numpy as np
@@ -58,9 +59,9 @@ _LAYOUTS: dict[str, dict] = {
 
 def _world_bounds(vols: list[VolumeEntry], pad_frac: float = 0.03) -> tuple:
     """
-    Padded world-frame (lo, hi) [x, y, z] enclosing all corners of `vols`,
-    or (None, None) when empty.  The 2D views draw projections of these same
-    corners, so the box also encloses every drawn 2D polygon.
+    Padded (lo, hi) [x, y, z] in the IR frame enclosing all corners of
+    `vols`, or (None, None) when empty.  The 2D views draw projections of
+    these same corners, so the box also encloses every drawn 2D polygon.
     """
     if not vols:
         return None, None
@@ -86,10 +87,189 @@ def _n_placements(vols: list[VolumeEntry]) -> int:
     return len({(v.kind, v.name, v.meta.get("copy", id(v))) for v in vols})
 
 
+def _group_by(vols: list[VolumeEntry], key) -> dict[str, list[VolumeEntry]]:
+    """`vols` grouped by key(v), groups in order of first appearance."""
+    groups: dict[str, list[VolumeEntry]] = defaultdict(list)
+    for v in vols:
+        groups[key(v)].append(v)
+    return groups
+
+
+# ---------------------------------------------------------------------------
+# Drawing
+# ---------------------------------------------------------------------------
+
+class _Panels(NamedTuple):
+    """The four panels of a plot_ir figure and their shared bounds."""
+    ax3: Any         # 3D view
+    views2d: list    # (axes, horizontal world axis, vertical world axis, title)
+    o3: tuple        # world axes shown as the 3D view's X, Y, Z
+    lo: Any          # _world_bounds() of the figure; None when nothing is drawn
+    hi: Any
+
+
+def _faces3d(corners: list, o3: tuple) -> list:
+    """The six faces of every box in `corners` ((8,3) arrays), as vertex
+    lists in the 3D view's axis order."""
+    return [[[c[j][o3[0]], c[j][o3[1]], c[j][o3[2]]] for j in fi]
+            for c in corners for fi in BOX_FACES]
+
+
+def _draw_batch(pn: _Panels, vols: list[VolumeEntry], col: str, label: str,
+                face_alpha: float, edge_alpha: float, lw: float, zorder: int, *,
+                patches: bool = False, per_box: bool = False,
+                thin_as_lines: bool = False) -> None:
+    """
+    Draw the boxes of `vols` in colour `col` on all four panels, with a
+    legend entry `label` in each.
+
+    By default each panel gets one collection and the 2D legend entries are
+    lines.  ``patches``: one Polygon per box in the 2D views, the legend
+    entry then shows a patch.  ``per_box``: one 3D collection per box, and
+    the 2D legend entry in the first 2D view only.  ``thin_as_lines``: boxes
+    thinner than THIN_FRAC of a 2D view are drawn as lines (collections only).
+    """
+    if not vols:
+        return
+    from matplotlib.collections import LineCollection, PolyCollection
+    from matplotlib.colors import to_rgba
+    from matplotlib.patches import Polygon
+    from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+
+    face, edge = to_rgba(col, face_alpha), to_rgba(col, edge_alpha)
+    corners = [box_corners_world(v.pos, v.ext, v.rot) for v in vols]
+    for i, cs in enumerate([[c] for c in corners] if per_box else [corners]):
+        pn.ax3.add_collection3d(Poly3DCollection(
+            _faces3d(cs, pn.o3), facecolor=face, edgecolor=edge, linewidth=lw,
+            zorder=zorder))
+        if i == 0:
+            pn.ax3.plot([], [], [], color=col, label=label, linewidth=3)
+
+    lo, hi = pn.lo, pn.hi
+    for n, (ax2d, ah, av, _) in enumerate(pn.views2d):
+        polys = [project_polygon(c, ah, av) for c in corners]
+        if patches:
+            lbl = label if n == 0 or not per_box else "_"
+            for poly in polys:
+                ax2d.add_patch(Polygon(poly, closed=True, facecolor=face,
+                                       edgecolor=edge, linewidth=lw,
+                                       label=lbl, zorder=zorder))
+                lbl = "_"
+            continue
+        lines = []
+        if thin_as_lines and lo is not None:
+            boxes, polys = polys, []
+            for poly in boxes:
+                pmin, pmax = poly.min(axis=0), poly.max(axis=0)
+                w, h = pmax - pmin
+                mid = (pmin + pmax) / 2
+                if w < THIN_FRAC * (hi[ah] - lo[ah]):
+                    lines.append([(mid[0], pmin[1]), (mid[0], pmax[1])])
+                elif h < THIN_FRAC * (hi[av] - lo[av]):
+                    lines.append([(pmin[0], mid[1]), (pmax[0], mid[1])])
+                else:
+                    polys.append(poly)
+        if polys:
+            ax2d.add_collection(PolyCollection(polys, facecolor=face, edgecolor=edge,
+                                               linewidth=lw, zorder=zorder))
+        if lines:
+            ax2d.add_collection(LineCollection(lines, colors=[to_rgba(col, 1.0)],
+                                               linewidth=1.5, zorder=zorder))
+        ax2d.plot([], [], color=col, label=label, linewidth=3)
+
+
+def _draw_highlight(pn: _Panels, context: list[VolumeEntry], labels: list[str],
+                    groups: list[list[VolumeEntry]], dim: float) -> None:
+    """Grey context volumes, then each highlight group on top in its colour."""
+    _draw_batch(pn, context, CONTEXT_COL, f"other ({_n_placements(context)})",
+                dim, min(1.0, 5 * dim), 0.2, 1)
+    for k, (lbl, g) in enumerate(zip(labels, groups)):
+        _draw_batch(pn, g, SURFACE_PALETTE[k % len(SURFACE_PALETTE)],
+                    f"{lbl} ({_n_placements(g)})", HL_FACE_ALPHA, 1.0,
+                    HL_LINEWIDTH, 10 + k, thin_as_lines=True)
+
+
+def _draw_kinds(pn: _Panels, vols: list[VolumeEntry], colour_surfaces: bool) -> None:
+    """Volumes coloured by kind: struct per name, then anodes, cathodes,
+    field shapers, optical detectors and radio volumes (one colour per
+    surface, or per producer, when `colour_surfaces`)."""
+    by_kind = _group_by(vols, lambda v: v.kind)
+
+    for name, g in _group_by(by_kind["struct"], lambda v: v.name).items():
+        col, alpha = STRUCT_PALETTE.get(name, STRUCT_DEFAULT)
+        _draw_batch(pn, g, col, name, alpha, alpha, 0.3, 1, patches=True)
+
+    def boxes(g, col, label, zorder):
+        _draw_batch(pn, g, col, label, FACE_ALPHA, FACE_ALPHA, 0.4, zorder,
+                    patches=True, per_box=True)
+
+    boxes(by_kind["anode"], ANODE_COL, f"Anodes ({len(by_kind['anode'])})", 3)
+    boxes(by_kind["cathode"], CATHODE_COL,
+          f"Cathodes ({len(by_kind['cathode'])})", 3)
+    # one ring = several boxes: count placements, not boxes
+    boxes(by_kind["fieldshaper"], FSHAPER_COL,
+          f"Field shapers ({_n_placements(by_kind['fieldshaper'])})", 2)
+    boxes(by_kind["opdet"], OPDET_COL, f"Opt. det. ({len(by_kind['opdet'])})", 4)
+
+    radios = by_kind["radio"]
+    if not colour_surfaces:
+        boxes(radios, RADIO_COL, f"Radio vol. ({len(radios)})", 2)
+        return
+    # one colour per selected surface (producer#index), or per producer when
+    # there are too many surfaces for a readable legend
+    groups = _group_by(radios, _surface_tag)
+    if len(groups) > MAX_SURFACE_GROUPS:
+        groups = _group_by(radios, lambda v: v.name)
+    per_surface = all(len(g) == 1 for g in groups.values())
+    for k, (lbl, g) in enumerate(groups.items()):
+        boxes(g, SURFACE_PALETTE[k % len(SURFACE_PALETTE)],
+              lbl if per_surface else f"{lbl} ({len(g)})", 2)
+
+
+def _setup_axes(pn: _Panels, layout: dict, view: tuple, proportional: bool) -> None:
+    """Limits, labels, titles and legends of the four panels."""
+    ax3, o3, lo, hi = pn.ax3, pn.o3, pn.lo, pn.hi
+    if lo is not None:
+        span = hi - lo
+        ax3.set_xlim(lo[o3[0]], hi[o3[0]])
+        if layout["flip3d_y"]:
+            ax3.set_ylim(hi[o3[1]], lo[o3[1]])
+        else:
+            ax3.set_ylim(lo[o3[1]], hi[o3[1]])
+        ax3.set_zlim(lo[o3[2]], hi[o3[2]])
+        ax3.set_box_aspect((span[o3[0]], span[o3[1]], span[o3[2]]))
+
+    names = "xyz"
+    ax3.set_xlabel(f"{names[o3[0]]} [cm]")
+    ax3.set_ylabel(f"{names[o3[1]]} [cm]")
+    ax3.set_zlabel(f"{names[o3[2]]} [cm]")
+    ax3.view_init(elev=view[0], azim=view[1])
+    ax3.set_proj_type("ortho")
+    ax3.set_title("3D (ortho, proportional)")
+    ax3.legend(fontsize=7, loc="upper right", frameon=False)
+
+    # All 2D views share the same world bounding box, so matching axes line
+    # up across panels; when proportional they are also drawn to scale
+    # (1 cm == 1 cm on both axes), otherwise they fill their grid cell.
+    labels = layout["labels"]
+    for ax2d, ah, av, ttl in pn.views2d:
+        ax2d.set_xlabel(f"{labels[ah]} [cm]")
+        ax2d.set_ylabel(f"{labels[av]} [cm]")
+        ax2d.set_title(ttl)
+        if lo is not None:
+            ax2d.set_xlim(lo[ah], hi[ah])
+            ax2d.set_ylim(lo[av], hi[av])
+        else:
+            ax2d.autoscale()
+        ax2d.set_aspect("equal" if proportional else "auto", adjustable="box")
+        # above the highlight collections (zorder 10+)
+        ax2d.legend(fontsize=7, frameon=False).set_zorder(100)
+        ax2d.grid(True, alpha=0.25)
+
+
 # ---------------------------------------------------------------------------
 # Core plotting function (importable from notebooks etc.)
 # ---------------------------------------------------------------------------
-
 def plot_ir(
     ir: IRCollection,
     out_path: str,
@@ -162,17 +342,13 @@ def plot_ir(
         raise ValueError(f"unknown orientation '{orientation}' "
                          f"(expected one of: hd, vd, auto)")
     layout = _LAYOUTS[orientation]
-    o3     = layout["order3d"]
 
     plt = import_mpl()
-    from matplotlib.patches import Polygon as MplPolygon
-    from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
     vols = select_volumes(ir, kinds=kinds, name_patterns=name_patterns,
                           kind_patterns=kind_patterns, surfaces=surfaces,
                           picks=picks)
     all_vols = vols
-
     hl_labels: list[str] = []
     hl_groups: list[list[VolumeEntry]] = []
     if highlight:
@@ -182,192 +358,25 @@ def plot_ir(
                 print(f"[warn] --highlight '{lbl}' matches no selected volume",
                       file=sys.stderr)
 
-    filtered = IRCollection(source=ir.source, detector=ir.detector, volumes=vols,
-                            frame=ir.frame)
-
-    anodes  = filtered.by_kind("anode")
-    opdets  = filtered.by_kind("opdet")
-    cathodes = filtered.by_kind("cathode")
-    fshapers = filtered.by_kind("fieldshaper")
-    structs = filtered.by_kind("struct")
-    radios  = filtered.by_kind("radio")
-
     fig = plt.figure(figsize=(16, 10))
     if title:
         fig.suptitle(title, fontsize=11, fontweight="bold")
-
-    ax3 = fig.add_subplot(2, 2, 1, projection="3d")
-    # (axes, horizontal world axis, vertical world axis, title) per 2D panel
-    views2d = [(fig.add_subplot(2, 2, k), ah, av, ttl)
-               for k, (ah, av, ttl) in zip((2, 3, 4), layout["views"])]
-
-    # ---- axis limits (enclose every drawn volume, or the highlights) ----
+    # axis limits enclose every drawn volume, or the highlights
     hl_vols = [v for g in hl_groups for v in g]
     lo, hi = _world_bounds(hl_vols if zoom_highlight and hl_vols else all_vols)
-
-    # ---- batched box drawing (context and highlights) ----
-    from matplotlib.collections import LineCollection, PolyCollection
-    from matplotlib.colors import to_rgba
-
-    def _draw_batch(bvols: list[VolumeEntry], col: str, label: str,
-                    face_alpha: float, edge_alpha: float, lw: float,
-                    zorder: int, thin_as_lines: bool = False):
-        if not bvols:
-            return
-        face, edge = to_rgba(col, face_alpha), to_rgba(col, edge_alpha)
-        corners = [box_corners_world(v.pos, v.ext, v.rot) for v in bvols]
-        faces3d = [[[c[j][o3[0]], c[j][o3[1]], c[j][o3[2]]] for j in fi]
-                   for c in corners for fi in BOX_FACES]
-        pc3 = Poly3DCollection(faces3d, facecolor=face, edgecolor=edge, linewidth=lw)
-        pc3.set_zorder(zorder)
-        ax3.add_collection3d(pc3)
-        ax3.plot([], [], [], color=col, label=label, linewidth=3)
-        for ax2d, ah, av, _ in views2d:
-            polys, lines = [], []
-            for c in corners:
-                poly = project_polygon(c, ah, av)
-                if thin_as_lines and lo is not None:
-                    pmin, pmax = poly.min(axis=0), poly.max(axis=0)
-                    w, h = pmax - pmin
-                    mid = (pmin + pmax) / 2
-                    if w < THIN_FRAC * (hi[ah] - lo[ah]):
-                        lines.append([(mid[0], pmin[1]), (mid[0], pmax[1])])
-                        continue
-                    if h < THIN_FRAC * (hi[av] - lo[av]):
-                        lines.append([(pmin[0], mid[1]), (pmax[0], mid[1])])
-                        continue
-                polys.append(poly)
-            if polys:
-                ax2d.add_collection(PolyCollection(polys, facecolor=face, edgecolor=edge,
-                                                   linewidth=lw, zorder=zorder))
-            if lines:
-                ax2d.add_collection(LineCollection(lines, colors=[to_rgba(col, 1.0)],
-                                                   linewidth=1.5, zorder=zorder))
-            ax2d.plot([], [], color=col, label=label, linewidth=3)
+    pn = _Panels(ax3=fig.add_subplot(2, 2, 1, projection="3d"),
+                 views2d=[(fig.add_subplot(2, 2, k), ah, av, ttl)
+                          for k, (ah, av, ttl) in zip((2, 3, 4), layout["views"])],
+                 o3=layout["order3d"], lo=lo, hi=hi)
 
     if highlight:
-        _draw_batch(vols, CONTEXT_COL, f"other ({_n_placements(vols)})",
-                    dim, min(1.0, 5 * dim), 0.2, zorder=1)
-        for k, (lbl, g) in enumerate(zip(hl_labels, hl_groups)):
-            _draw_batch(g, SURFACE_PALETTE[k % len(SURFACE_PALETTE)],
-                        f"{lbl} ({_n_placements(g)})",
-                        HL_FACE_ALPHA, 1.0, HL_LINEWIDTH, zorder=10 + k,
-                        thin_as_lines=True)
-        anodes = opdets = cathodes = fshapers = structs = radios = []
-
-    # ---- structural volumes (batched per name) ----
-    s_face_groups: dict[str, list]       = defaultdict(list)
-    s_poly_groups: dict[str, dict]       = {}
-
-    for v in structs:
-        corners = box_corners_world(v.pos, v.ext, v.rot)
-        for fi in BOX_FACES:
-            s_face_groups[v.name].append(
-                [[corners[j][o3[0]], corners[j][o3[1]], corners[j][o3[2]]] for j in fi])
-        if v.name not in s_poly_groups:
-            s_poly_groups[v.name] = {ax2d: [] for ax2d, *_ in views2d}
-        for ax2d, ah, av, _ in views2d:
-            s_poly_groups[v.name][ax2d].append(project_polygon(corners, ah, av))
-
-    for vname, faces in s_face_groups.items():
-        col, alpha = STRUCT_PALETTE.get(vname, STRUCT_DEFAULT)
-        ax3.add_collection3d(Poly3DCollection(
-            faces, alpha=alpha, facecolor=col, edgecolor=col, linewidth=0.3))
-        ax3.plot([], [], [], color=col, label=vname, linewidth=3)
-
-    for vname, ax_polys in s_poly_groups.items():
-        col, alpha = STRUCT_PALETTE.get(vname, STRUCT_DEFAULT)
-        for ax2d, polys in ax_polys.items():
-            for k, poly2d in enumerate(polys):
-                ax2d.add_patch(MplPolygon(poly2d, closed=True,
-                                          facecolor=col, edgecolor=col,
-                                          alpha=alpha, linewidth=0.3,
-                                          label=vname if k == 0 else "_", zorder=1))
-
-    # ---- generic box-drawing helper ----
-    def _draw_boxes(vols: list[VolumeEntry], col: str, label_pfx: str, zorder3d: int,
-                    show_count: bool = True):
-        for i, v in enumerate(vols):
-            corners   = box_corners_world(v.pos, v.ext, v.rot)
-            lbl       = (f"{label_pfx} ({len(vols)})" if show_count else label_pfx) \
-                        if i == 0 else "_"
-            faces_3d  = [[[corners[j][o3[0]], corners[j][o3[1]], corners[j][o3[2]]]
-                           for j in fi] for fi in BOX_FACES]
-            ax3.add_collection3d(Poly3DCollection(
-                faces_3d, alpha=FACE_ALPHA,
-                facecolor=col, edgecolor=col, linewidth=0.4))
-            if i == 0:
-                ax3.plot([], [], [], color=col, label=lbl, linewidth=3)
-            for ax2d, ah, av, _ in views2d:
-                poly2d = project_polygon(corners, ah, av)
-                ax2d.add_patch(MplPolygon(poly2d, closed=True,
-                                          facecolor=col, edgecolor=col,
-                                          alpha=FACE_ALPHA, linewidth=0.4,
-                                          label=lbl, zorder=zorder3d))
-                lbl = "_"
-
-    _draw_boxes(anodes, ANODE_COL, "Anodes",    zorder3d=3)
-    _draw_boxes(cathodes, CATHODE_COL, "Cathodes", zorder3d=3)
-    # one ring = several boxes: count placements, not boxes
-    _draw_boxes(fshapers, FSHAPER_COL,
-                f"Field shapers ({_n_placements(fshapers)})", zorder3d=2,
-                show_count=False)
-    _draw_boxes(opdets, OPDET_COL, "Opt. det.", zorder3d=4)
-    picked_radio = picks and any(parse_pick_spec(s)[0].search(v.name)
-                                 for s in picks for v in radios)
-    if (surfaces or picked_radio) and radios:
-        # one colour per selected surface (producer#index), or per producer
-        # when there are too many surfaces for a readable legend
-        groups: dict[str, list[VolumeEntry]] = defaultdict(list)
-        for v in radios:
-            groups[_surface_tag(v)].append(v)
-        if len(groups) > MAX_SURFACE_GROUPS:
-            groups = defaultdict(list)
-            for v in radios:
-                groups[v.name].append(v)
-        per_surface = all(len(g) == 1 for g in groups.values())
-        for k, (lbl, gvols) in enumerate(groups.items()):
-            _draw_boxes(gvols, SURFACE_PALETTE[k % len(SURFACE_PALETTE)],
-                        lbl, zorder3d=2, show_count=not per_surface)
+        _draw_highlight(pn, vols, hl_labels, hl_groups, dim)
     else:
-        _draw_boxes(radios, RADIO_COL, "Radio vol.", zorder3d=2)
-
-    if lo is not None:
-        span = hi - lo
-        ax3.set_xlim(lo[o3[0]], hi[o3[0]])
-        if layout["flip3d_y"]:
-            ax3.set_ylim(hi[o3[1]], lo[o3[1]])
-        else:
-            ax3.set_ylim(lo[o3[1]], hi[o3[1]])
-        ax3.set_zlim(lo[o3[2]], hi[o3[2]])
-        ax3.set_box_aspect((span[o3[0]], span[o3[1]], span[o3[2]]))
-
-    names = "xyz"
-    ax3.set_xlabel(f"{names[o3[0]]} [cm]")
-    ax3.set_ylabel(f"{names[o3[1]]} [cm]")
-    ax3.set_zlabel(f"{names[o3[2]]} [cm]")
-    ax3.view_init(elev=view[0], azim=view[1])
-    ax3.set_proj_type("ortho")
-    ax3.set_title("3D (ortho, proportional)")
-    ax3.legend(fontsize=7, loc="upper right", frameon=False)
-
-    # All 2D views share the same world bounding box, so matching axes line
-    # up across panels; when proportional they are also drawn to scale
-    # (1 cm == 1 cm on both axes), otherwise they fill their grid cell.
-    labels = layout["labels"]
-    for ax2d, ah, av, ttl in views2d:
-        ax2d.set_xlabel(f"{labels[ah]} [cm]")
-        ax2d.set_ylabel(f"{labels[av]} [cm]")
-        ax2d.set_title(ttl)
-        if lo is not None:
-            ax2d.set_xlim(lo[ah], hi[ah])
-            ax2d.set_ylim(lo[av], hi[av])
-        else:
-            ax2d.autoscale()
-        ax2d.set_aspect("equal" if proportional else "auto", adjustable="box")
-        # above the highlight collections (zorder 10+)
-        ax2d.legend(fontsize=7, frameon=False).set_zorder(100)
-        ax2d.grid(True, alpha=0.25)
+        picked_radio = picks and any(parse_pick_spec(s)[0].search(v.name)
+                                     for s in picks for v in vols
+                                     if v.kind == "radio")
+        _draw_kinds(pn, vols, colour_surfaces=bool(surfaces or picked_radio))
+    _setup_axes(pn, layout, view, proportional)
 
     fig.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
