@@ -8,6 +8,8 @@ Inspect DUNE background sources without a LArSoft environment:
   configurations, with each producer's full FHiCL table
 - **radiological position profiles** — the `distrib_x/y/z` formulas of those
   producers, drawn over the range the generator samples
+- **background inspection** — list the backgrounds of an IR, select them on a
+  metadata field or a region, see [bki-bkg](#bki-bkg)
 
 Python (NumPy + Matplotlib + Plotly), no LArSoft required.  PyROOT is needed
 for the `distrib_x/y/z` formulas, which are ROOT TF1 expressions and are
@@ -52,6 +54,7 @@ pip install --no-deps .          # add numpy if the environment lacks it
 | `numpy` | everything (`bki-extract` of geometry and producers without `distrib_*`, `bki-plot --list` / `-L` need nothing else) |
 | `matplotlib` | `bki-plot` and `bki-distrib` PDF/PNG output, `plot_ir` |
 | `plotly` | `make_figure` |
+| `rich` | `bki-bkg` tables (its `--json` output needs nothing else) |
 | `jupyter`, `nbconvert` | `nb_B.ipynb`, `scripts/run_notebook.py` |
 | `root` (group) | `distrib_*` formulas: `bki-extract` of producers with `distrib_*`, `bki-distrib`, `tests/test_tf1.py`.  `bki-extract --gdml-backend root` and `scripts/compare_backends.py` need a ROOT with TGeo/GDML (dunesw) |
 
@@ -164,7 +167,18 @@ bki-distrib detector.json --list     # the same as text
 
 See [bki-distrib](#bki-distrib).
 
-### 4. Interactive notebook
+### 4. Inspect the backgrounds
+
+```bash
+bki-bkg radbkg.json list                       # every background
+bki-bkg radbkg.json select nuclide=Po218       # on a metadata field
+bki-bkg radbkg.json region --slice x=-328      # active on a plane
+bki-bkg radbkg.json suggest                    # other selections worth trying
+```
+
+See [bki-bkg](#bki-bkg).
+
+### 5. Interactive notebook
 
 ```bash
 # Run from the command line (executes nb_B.ipynb non-interactively)
@@ -468,6 +482,63 @@ distribution), `Npx`, the generator volume (`meta.source`) and the producers
 with their nuclides.
 
 IR files must carry the `distrib_*` keys above: re-run `bki-extract` for older ones.
+
+---
+
+## bki-bkg
+
+`bki-bkg` inspects the radiological backgrounds of an IR. A background is one
+radiological producer: the radio volumes of the IR that share its name (its
+sampling boxes) and its FHiCL parameters (`producers`). Tables are drawn with
+[rich](https://rich.readthedocs.io); `--json` prints the same data as JSON
+instead, for scripts (and needs no `rich`).
+
+```
+bki-bkg <ir.json> [--json] COMMAND ...
+
+  list [--sort name|volumes]       every background: module, nuclide, activity
+                                   (BqPercc, or rate), material, sampling
+                                   (meta.source), number of volumes, surfaces,
+                                   axes with a distrib_ formula
+  show NAME_RE ... [--limit N]     the producer's FHiCL parameters, its surfaces
+                                   and its volumes (first N, default 25; 0: all)
+  select EXPR ...                  the backgrounds for which every EXPR holds
+  region [--x LO HI] [--y ..] [--z ..] [--box X0 X1 Y0 Y1 Z0 Z1]
+         [--slice AXIS=VALUE ...] [--thickness T] [--volumes]
+                                   the backgrounds active in a region
+  suggest                          selections and regions worth trying
+```
+
+**`select`.** An `EXPR` is `FIELD=REGEX` (`re.search` on any value of the
+field), `FIELD!=REGEX` (no value matches; also true when the background lacks
+the field), `FIELD<N`, `<=`, `>`, `>=` (any numeric value), or a bare `FIELD`
+(the background has it). A `FIELD` is a FHiCL parameter of the producer
+(`isotope`, `material`, `volume_gen`, `decay_chain`, `BqPercc`, ...) or a
+metadata key of its volumes (`nuclide`, `surface`, `node`, `source`,
+`module_type`, `T0`, ...), plus `name` and `nvolumes`. A list or a table
+contributes its items. An unknown field is an error that names the closest
+known ones.
+
+**`region`.** The region is the intersection of the constraints, in the frame
+stored in the IR (world unless extracted with `--frame`). A background is
+active when the axis-aligned box of at least one of its volumes overlaps the
+region; touching counts. `--slice x=-328` is the plane `x = -328` (a
+`--thickness` gives it a width). The table gives, per background, how many of
+its volumes overlap and the extent of those; `--volumes` lists them.
+
+**`suggest`.** The values shared by several backgrounds for each field, with
+the `select` command and the number of backgrounds; thresholds for the numeric
+fields; the words of the names (`Mesh`, `Cathode`, ...); and the planes the
+volumes lie on, with the `region --slice` command, how many backgrounds lie on
+the plane and how many merely cross it (bulk backgrounds cross every plane in
+the cryostat).
+
+```bash
+bki-bkg radbkg.json select nuclide=K40 'BqPercc<0.1'      # both must hold
+bki-bkg radbkg.json select 'material=G10|vm2000' --json
+bki-bkg radbkg.json region --x -330 -300 --z 0 500 --volumes
+bki-bkg radbkg.json show Mesh --limit 0
+```
 
 ---
 
@@ -1056,6 +1127,7 @@ Both mirror LArSoft's `cet::search_path` behaviour (first-match-wins).
 | `tests/test_fcl.py` | the FHiCL parser, `#include` expansion and `producer_volumes` (on a small GDML of boxes) | nothing (ROOT-free) |
 | `tests/test_formula_lines.py` | the formula text layout of the `bki-distrib` pages | nothing (ROOT-free) |
 | `tests/test_select.py` | the `--pick` / `--surface` / `--highlight` specs and `select_volumes` | nothing (ROOT-free) |
+| `tests/test_bkg.py` | `bki-bkg`: backgrounds, select expressions, regions, suggestions, `--json` output | nothing; the table rendering needs `rich` (skipped without it) |
 
 Each file runs on its own or under pytest (not a dependency).  On the host:
 

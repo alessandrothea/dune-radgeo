@@ -8,7 +8,7 @@ authors = [
 ]
 requires-python = ">=3.9"
 
-# Full install: bki-extract, bki-plot, bki-measure, bki-distrib and the notebook.
+# Full install: bki-extract, bki-plot, bki-measure, bki-distrib, bki-bkg and the notebook.
 # bki-extract alone needs numpy, plus PyROOT (the root group below, or a dunesw
 # area's ROOT) for producers with distrib_x/y/z: pip install --no-deps . numpy
 dependencies = [
@@ -17,6 +17,7 @@ dependencies = [
     "plotly",      # notebook_plot.make_figure
     "jupyter",     # notebooks/nb_B.ipynb, scripts/run_notebook.py
     "nbconvert",
+    "rich",        # bki-bkg tables
 ]
 
 # PyROOT for the host venv, from the `root` pip wheel: it evaluates the
@@ -40,6 +41,7 @@ bki-extract = "duneradgeo.extract:main"
 bki-plot    = "duneradgeo.plot:main"
 bki-measure = "duneradgeo.measure:main"
 bki-distrib = "duneradgeo.distrib:main"
+bki-bkg     = "duneradgeo.bkg:main"
 
 [build-system]
 requires = ["hatchling"]
