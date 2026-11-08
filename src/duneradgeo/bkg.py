@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import difflib
 import json
-import os
 import re
 import shlex
 from collections import Counter, defaultdict
@@ -41,11 +40,11 @@ from pathlib import Path
 import click
 import numpy as np
 
+from ._cli import CONTEXT_SETTINGS, CliError, console
 from ._draw import aabb
 from .ir import IRCollection
 
 AXES = "xyz"
-_PIPE_WIDTH = 160            # table width when the output is not a terminal
 _MAX_CHOICES = 12            # a field with more distinct values is not suggested
 _NOT_SUGGESTED = {"name", "nvolumes", "index"}   # plus every distrib_* field
 _BOX_FIELD = re.compile(r"^[XYZ][01]$")        # sampling boxes: see `region`
@@ -433,19 +432,6 @@ def suggestions(bgs: list) -> dict:
 # rendering (rich)
 # ---------------------------------------------------------------------------
 
-def _rich():
-    """The rich modules, or a SystemExit explaining how to install them."""
-    try:
-        import rich.console
-        import rich.panel
-        import rich.table
-        import rich.tree  # noqa: F401
-    except ImportError:
-        raise BkgError("bki-bkg needs the 'rich' package (pip install rich); "
-                       "--json works without it") from None
-    return rich
-
-
 def _surfaces_text(items: list) -> str:
     return ", ".join(f"{d['surface']}" + (f" ×{d['volumes']}" if d["volumes"] > 1 else "")
                      for d in items)
@@ -587,11 +573,7 @@ def render_suggestions(console, d: dict, total: int) -> None:
 # command line (click)
 # ---------------------------------------------------------------------------
 
-class BkgError(click.ClickException):
-    """A message for the user, printed as '[error] ...' with exit code 1."""
-
-    def show(self, file=None) -> None:
-        click.echo(f"[error] {self.message}", err=True)
+BkgError = CliError
 
 
 class _Group(click.Group):
@@ -623,11 +605,7 @@ class _Session:
         return ir, bgs
 
     def console(self):
-        """A rich console; wide when the output is not a terminal."""
-        console = _rich().console.Console()
-        if not console.is_terminal and "COLUMNS" not in os.environ:
-            console = _rich().console.Console(width=_PIPE_WIDTH)
-        return console
+        return console()
 
     def emit(self, data, render) -> None:
         """JSON of `data`, or render(console) for the tables."""
@@ -665,7 +643,7 @@ def _json_option(fn):
                         callback=callback, help="Print JSON instead of tables.")(fn)
 
 
-@click.group(cls=_Group, context_settings={"help_option_names": ["-h", "--help"]},
+@click.group(cls=_Group, context_settings=CONTEXT_SETTINGS,
              help="Inspect the radiological backgrounds of a JSON IR (bki-extract).\n\n"
                   "A background is one radiological producer: its radio volumes "
                   "(sampling boxes) and its FHiCL parameters.\n\n"
