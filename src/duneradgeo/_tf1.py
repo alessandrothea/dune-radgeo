@@ -1,7 +1,7 @@
 """ROOT TF1 evaluation of the RadioGen/Decay0Gen distrib_x/y/z formulas.
 
 The code's one full account of how the generator samples these formulas (the
-other modules point here; the README's bki-distrib section is the user's).
+other modules point here; the bki-distrib page (docs/bki-distrib.md) is the user's).
 
 larsimrad's BaseRadioGen samples each axis independently.  distrib_<axis> is
 a 1D formula in the variable x, built as ``TF1(name, formula, lo, hi)`` over
