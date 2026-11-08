@@ -35,3 +35,20 @@ echo "venv:    $VIRTUAL_ENV"
 echo "package: $PKG"
 env -u PYTHONPATH python -m pip --version
 env -u PYTHONPATH python -m pip install --no-deps "$@" "${editable[@]}" "$PKG"
+
+# The commands need click and rich at run time; the install above is --no-deps,
+# so add whichever of the two the venv's python cannot import yet.
+missing=()
+for mod in click rich; do
+  python -c "import $mod" 2>/dev/null || missing+=("$mod")
+done
+if [ "${#missing[@]}" -gt 0 ]; then
+  echo "installing missing run-time packages: ${missing[*]}"
+  if ! env -u PYTHONPATH python -m pip install "${missing[@]}"; then
+    echo "dunesw_installme.sh: could not install ${missing[*]} (no network?)." >&2
+    echo "  duneradgeo is installed but its commands need them; install them by hand with" >&2
+    echo "  env -u PYTHONPATH python -m pip install ${missing[*]}" >&2
+    exit 1
+  fi
+fi
+python -c "import click, rich" || { echo "dunesw_installme.sh: click/rich still not importable" >&2; exit 1; }
