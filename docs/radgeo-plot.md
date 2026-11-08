@@ -1,6 +1,6 @@
-# bki-plot
+# radgeo plot
 
-`bki-plot` renders a JSON IR ([bki-extract](bki-extract.md)) as a matplotlib
+`radgeo plot` renders a JSON IR ([radgeo extract](radgeo-extract.md)) as a matplotlib
 PDF (or PNG): a 3D orthographic view and three 2D views of the volumes,
 coloured by kind, with selectors to restrict what is drawn, a highlight mode
 and listings (`-l` / `-L`) to check a selection before plotting it.
@@ -8,8 +8,8 @@ and listings (`-l` / `-L`) to check a selection before plotting it.
 ## Usage
 
 ```bash
-bki-plot detector.json --out detector.pdf
-bki-plot detector.json --out detector.pdf --view 30 -45
+radgeo plot detector.json --out detector.pdf
+radgeo plot detector.json --out detector.pdf --view 30 -45
 ```
 
 Layout: 3D ortho view (proportional axes) + Z–Y beam face + Z–X top view +
@@ -31,7 +31,7 @@ the axes change:
 ## Options
 
 ```
-Usage: bki-plot [OPTIONS] IR_FILE
+Usage: radgeo plot [OPTIONS] IR_FILE
 
   Render a JSON IR as a matplotlib PDF.
 
@@ -44,9 +44,9 @@ Usage: bki-plot [OPTIONS] IR_FILE
     bot-right      X-Y  side view               Y-X  side view
 
   Usage:
-    bki-plot detector.json --out detector.pdf
-    bki-plot detector.json --out detector.pdf --view 20 -60
-    bki-plot detector.json --highlight 'bottom planes=^volTPCPlane#@volTPC_PV_Bot'
+    radgeo plot detector.json --out detector.pdf
+    radgeo plot detector.json --out detector.pdf --view 20 -60
+    radgeo plot detector.json --highlight 'bottom planes=^volTPCPlane#@volTPC_PV_Bot'
 
 Options:
   -l, --list                      Print volume kinds and names grouped by kind
@@ -117,13 +117,13 @@ use.  From Python, the same selection is available through `plot_ir` and
 
 ```bash
 # kinds, names and placement counts; radio producers list each surface
-bki-plot radio.json --list
+radgeo plot radio.json --list
 
 # per-placement IR-frame ranges, restricted to structural volumes
-bki-plot radio.json -L --kind struct
+radgeo plot radio.json -L --kind struct
 
 # where exactly are the cathode generation surfaces?
-bki-plot radio.json -L --kind radio --radio GenInCathode
+radgeo plot radio.json -L --kind radio --radio GenInCathode
 ```
 
 Every selector of this page also works with `--list` / `-L`, so a selection can be
@@ -133,42 +133,42 @@ checked before plotting it.
 
 ```bash
 # everything, output next to the IR (radio.pdf)
-bki-plot radio.json
+radgeo plot radio.json
 
 # detector geometry only, custom title and view angle
-bki-plot radio.json --no-radio --title "FD2 VD geometry" --view 30 -45 -o geometry.pdf
+radgeo plot radio.json --no-radio --title "FD2 VD geometry" --view 30 -45 -o geometry.pdf
 
 # anodes and active volume only
-bki-plot radio.json --kind anode struct --struct '^volTPCActive$' -o tpc.pdf
+radgeo plot radio.json --kind anode struct --struct '^volTPCActive$' -o tpc.pdf
 
 # drift geometry: anode and cathode planes
-bki-plot geo.json --kind anode cathode --orientation auto -o drift.pdf
+radgeo plot geo.json --kind anode cathode --orientation auto -o drift.pdf
 
 # field cage only, slim rings (photon-detector window) only
-bki-plot geo.json --kind fieldshaper --fieldshaper 'Slim$' -o fc_slim.pdf
+radgeo plot geo.json --kind fieldshaper --fieldshaper 'Slim$' -o fc_slim.pdf
 
 # Vertical Drift: drift axis x drawn vertically ("auto" picks it for VD IRs)
-bki-plot radio.json --orientation vd -o radio_vd.pdf
-bki-plot radio.json --orientation auto
+radgeo plot radio.json --orientation vd -o radio_vd.pdf
+radgeo plot radio.json --orientation auto
 
 # 2D views stretched to fill their panels instead of drawn to scale
-bki-plot radio.json --no-proportional -o radio_stretched.pdf
+radgeo plot radio.json --no-proportional -o radio_stretched.pdf
 
 # a PNG instead of a PDF (format follows the extension)
-bki-plot radio.json -o radio.png
+radgeo plot radio.json -o radio.png
 ```
 
 ## Plotting backgrounds
 
 ```bash
 # radio volumes only
-bki-plot radio.json --no-detector -o radio_only.pdf
+radgeo plot radio.json --no-detector -o radio_only.pdf
 
 # selected producers, drawn inside the detector outline
-bki-plot radio.json --radio 'GenInCathode|GenInAnode' -o cathode_anode.pdf
+radgeo plot radio.json --radio 'GenInCathode|GenInAnode' -o cathode_anode.pdf
 
 # selected producers + only the cryostat for context
-bki-plot radio.json --kind radio struct --struct volCryostat \
+radgeo plot radio.json --kind radio struct --struct volCryostat \
     --radio '^Ar39' -o ar39.pdf
 ```
 
@@ -176,7 +176,7 @@ bki-plot radio.json --kind radio struct --struct volCryostat \
 
 ```bash
 # 1. see which surfaces each background defines
-bki-plot radio.json --list --kind radio
+radgeo plot radio.json --list --kind radio
 #   radio  (5 placements)
 #     GenInCathode  (3)
 #       #0    plane_x@-300           Rn222            explicit
@@ -188,20 +188,20 @@ bki-plot radio.json --list --kind radio
 
 # 2. by index: surfaces 0 and 2 of the cathode producer
 #    (all other backgrounds are still drawn in full)
-bki-plot radio.json --surface 'GenInCathode#0,2' -o cathode_02.pdf
+radgeo plot radio.json --surface 'GenInCathode#0,2' -o cathode_02.pdf
 
 # index ranges
-bki-plot radio.json --surface 'GenInCathode#1-2'
+radgeo plot radio.json --surface 'GenInCathode#1-2'
 
 # by regex on surface label / geometry node / nuclide
-bki-plot radio.json --surface 'GenInCathode#@plane_x@-'   # surfaces at negative x
-bki-plot radio.json --surface 'Ar39GenInLAr#@volFC_B'     # one geometry node
+radgeo plot radio.json --surface 'GenInCathode#@plane_x@-'   # surfaces at negative x
+radgeo plot radio.json --surface 'Ar39GenInLAr#@volFC_B'     # one geometry node
 
 # several specs: each narrows only the producers it names
-bki-plot radio.json --surface 'GenInCathode#0' 'Ar39GenInLAr#@bulk'
+radgeo plot radio.json --surface 'GenInCathode#0' 'Ar39GenInLAr#@bulk'
 
 # only the chosen surfaces, nothing else
-bki-plot radio.json --no-detector --radio GenInCathode --surface 'GenInCathode#1'
+radgeo plot radio.json --no-detector --radio GenInCathode --surface 'GenInCathode#1'
 ```
 
 ## `--surface` syntax
@@ -216,7 +216,7 @@ the form `PRODUCER_RE#SEL`:
 | `0,2,5-7`    | `meta.index` is in the list                                    |
 | `@REGEX`     | `meta.surface` (`bulk`, `plane_x@…`), `meta.node` or `meta.nuclide` matches |
 
-- `meta.surface` is derived by `bki-extract` from the box shape, not read
+- `meta.surface` is derived by `radgeo extract` from the box shape, not read
   from the FHiCL: `plane_<axis>@<centre>` when the box's thinnest extent is
   under 5 % of the next one, `bulk` otherwise. It is computed after the box
   is shrunk to the effective range, so a peaked `distrib_x` source (e.g. a
@@ -233,7 +233,7 @@ the form `PRODUCER_RE#SEL`:
 ## Picking individual placements
 
 Many geometry volumes share a name (112 `volTPC`, 28 `volAnodePlate`, …).
-`bki-extract` records where each placement sits in the GDML tree as
+`radgeo extract` records where each placement sits in the GDML tree as
 `meta.path`, one `volume:k` step per level below the world volume, where `k`
 counts the placements of that volume within its parent in GDML order:
 
@@ -250,18 +250,18 @@ physvol-name path `meta.pvpath` instead, e.g.
 
 ```bash
 # 1. find the placements
-bki-plot geo.json -L --kind anode
+radgeo plot geo.json -L --kind anode
 #   0  anode  volAnodePlate  ...  volDetEnclosure:0/volCryostat:0/volEnclosureTPC:0/volAnodePlate:0
 #   1  anode  volAnodePlate  ...  volDetEnclosure:0/volCryostat:0/volEnclosureTPC:0/volAnodePlate:1
 
 # 2. anode plates 0 and 2 only (everything else still drawn)
-bki-plot geo.json --pick 'volAnodePlate#@volAnodePlate:[02]$'
+radgeo plot geo.json --pick 'volAnodePlate#@volAnodePlate:[02]$'
 
 # TPC 5 and its active volume
-bki-plot geo.json --kind struct --pick '^volTPC$#@volTPC:5$' '^volTPCActive$#@/volTPC:5/'
+radgeo plot geo.json --kind struct --pick '^volTPC$#@volTPC:5$' '^volTPCActive$#@/volTPC:5/'
 
 # arapucas mounted directly in the cryostat (not in the TPC enclosure)
-bki-plot geo.json --kind opdet --pick 'volArapuca#@volCryostat:0/volArapuca:'
+radgeo plot geo.json --kind opdet --pick 'volArapuca#@volCryostat:0/volArapuca:'
 ```
 
 `--pick` takes `NAME_RE#@REGEX` specs, like `--surface`, but for every kind:
@@ -278,7 +278,7 @@ bki-plot geo.json --kind opdet --pick 'volArapuca#@volCryostat:0/volArapuca:'
 - Volumes not matched by any `NAME_RE` are untouched; several specs for the
   same volume are OR-ed.
 - IR files written before `meta.path` existed cannot be picked from; re-run
-  `bki-extract`.
+  `radgeo extract`.
 
 ## Highlighting volumes
 
@@ -290,23 +290,23 @@ and everything else is drawn as faint grey context.
 ```bash
 # ggd geometry with the wire planes extracted: where do the bottom-CRM
 # readout planes sit?  (they should be at the bottom anode, x ≈ -652)
-bki-extract dunevd10kt_v7_full10kt_ggd.gdml -o planes.json --frame volEnclosureTPC \
+radgeo extract dunevd10kt_v7_full10kt_ggd.gdml -o planes.json --frame volEnclosureTPC \
     --struct-pattern '^volTPCPlane[UVZ]$' '^volTPC$'
-bki-plot planes.json --orientation vd \
+radgeo plot planes.json --orientation vd \
     --highlight 'bottom planes=^volTPCPlane#@volTPC_PV_Bot' \
                 'top planes=^volTPCPlane#@volTPC_PV_Top' 'cathode=^volCathodeGrid$'
 
 # same check on a perl GDML (unnamed physvols): bottom CRMs are the odd copies
-bki-plot planes_ref.json --orientation vd \
+radgeo plot planes_ref.json --orientation vd \
     --highlight 'bottom planes=^volTPCPlane#@volTPC:\d*[13579]/'
 
 # wall-mounted photon detectors only, axes fitted to them
-bki-plot geo.json --kind opdet cathode --zoom-highlight \
+radgeo plot geo.json --kind opdet cathode --zoom-highlight \
     --highlight 'wall=volArapuca$#@volCryostat:0/volArapuca:'
 
 # check a spec before plotting: highlighted placements are marked *k
-bki-plot planes.json -l --highlight 'bottom planes=^volTPCPlane#@volTPC_PV_Bot'
-bki-plot planes.json -L --kind struct --highlight '^volTPCPlaneU$#@_PV_Bot'
+radgeo plot planes.json -l --highlight 'bottom planes=^volTPCPlane#@volTPC_PV_Bot'
+radgeo plot planes.json -L --kind struct --highlight '^volTPCPlaneU$#@_PV_Bot'
 ```
 
 `--highlight` takes `[LABEL=]NAME_RE[#SEL]` specs:

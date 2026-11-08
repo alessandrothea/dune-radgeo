@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Run nb_B.ipynb non-interactively against a given JSON IR file (IR_FILE: the
-JSON IR produced by bki-extract).
+JSON IR produced by radgeo extract).
 
 Examples:
 

@@ -1,4 +1,4 @@
-"""ROOT-free checks of the distrib_x/y/z formula text layout of bki-distrib
+"""ROOT-free checks of the distrib_x/y/z formula text layout of radgeo profiles
 (duneradgeo.distrib.raw_formula_lines and formula_lines).
 
 Run with pytest, or directly: python tests/test_formula_lines.py.  Needs no

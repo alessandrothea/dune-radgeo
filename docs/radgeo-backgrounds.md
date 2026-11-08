@@ -1,41 +1,41 @@
-# bki-bkg
+# radgeo backgrounds
 
-`bki-bkg` inspects the radiological backgrounds of an IR. A background is one
+`radgeo backgrounds` inspects the radiological backgrounds of an IR. A background is one
 radiological producer: the radio volumes of the IR that share its name (its
 sampling boxes) and its FHiCL parameters (`producers`). Tables are drawn with
 [rich](https://rich.readthedocs.io); `--json`, given after the command (or
 before the IR file), prints the same data as JSON instead, for scripts (and
 needs no `rich`). The command line uses [click](https://click.palletsprojects.com),
-so `bki-bkg IR_FILE COMMAND --help` describes each command (the help texts are
-reproduced below).  The IR comes from [bki-extract](bki-extract.md).
+so `radgeo backgrounds IR_FILE COMMAND --help` describes each command (the help texts are
+reproduced below).  The IR comes from [radgeo extract](radgeo-extract.md).
 
 ## Usage
 
 ```bash
-bki-bkg radbkg.json list
-bki-bkg radbkg.json select nuclide=K40 'BqPercc<0.1'      # both must hold
-bki-bkg radbkg.json select 'material=G10|vm2000' --json
-bki-bkg radbkg.json region --x -330 -300 --z 0 500 --volumes
-bki-bkg radbkg.json show Mesh --limit 0
+radgeo backgrounds radbkg.json list
+radgeo backgrounds radbkg.json select nuclide=K40 'BqPercc<0.1'      # both must hold
+radgeo backgrounds radbkg.json select 'material=G10|vm2000' --json
+radgeo backgrounds radbkg.json region --x -330 -300 --z 0 500 --volumes
+radgeo backgrounds radbkg.json show Mesh --limit 0
 ```
 
 ## Options
 
 ```
-Usage: bki-bkg [OPTIONS] IR_FILE COMMAND [ARGS]...
+Usage: radgeo backgrounds [OPTIONS] IR_FILE COMMAND [ARGS]...
 
-  Inspect the radiological backgrounds of a JSON IR (bki-extract).
+  Inspect the radiological backgrounds of a JSON IR (radgeo extract).
 
   A background is one radiological producer: its radio volumes (sampling boxes)
   and its FHiCL parameters.
 
   Examples:
-    bki-bkg ir.json list
-    bki-bkg ir.json show Po218 Cathode
-    bki-bkg ir.json select nuclide=Po218 'BqPercc<0.01'
-    bki-bkg ir.json region --slice x=-328
-    bki-bkg ir.json region --x -330 -300 --z 0 500 --volumes
-    bki-bkg ir.json select material=LAr --json
+    radgeo backgrounds ir.json list
+    radgeo backgrounds ir.json show Po218 Cathode
+    radgeo backgrounds ir.json select nuclide=Po218 'BqPercc<0.01'
+    radgeo backgrounds ir.json region --slice x=-328
+    radgeo backgrounds ir.json region --x -330 -300 --z 0 500 --volumes
+    radgeo backgrounds ir.json select material=LAr --json
 
 Options:
   --json      Print JSON instead of tables (also accepted after the command;
@@ -53,7 +53,7 @@ Commands:
 ### `list`
 
 ```
-Usage: bki-bkg IR_FILE list [OPTIONS]
+Usage: radgeo backgrounds IR_FILE list [OPTIONS]
 
   Every background: module, nuclide, activity, material, sampling, volumes.
 
@@ -67,7 +67,7 @@ Options:
 ### `show`
 
 ```
-Usage: bki-bkg IR_FILE show [OPTIONS] NAME_RE...
+Usage: radgeo backgrounds IR_FILE show [OPTIONS] NAME_RE...
 
   The FHiCL parameters, surfaces and volumes of the backgrounds whose name
   matches a regex (re.search).
@@ -81,7 +81,7 @@ Options:
 ### `select`
 
 ```
-Usage: bki-bkg IR_FILE select [OPTIONS] EXPR...
+Usage: radgeo backgrounds IR_FILE select [OPTIONS] EXPR...
 
   The backgrounds for which every EXPR holds.
 
@@ -103,7 +103,7 @@ Options:
 ### `region`
 
 ```
-Usage: bki-bkg IR_FILE region [OPTIONS]
+Usage: radgeo backgrounds IR_FILE region [OPTIONS]
 
   The backgrounds active in a region.
 
@@ -127,7 +127,7 @@ Options:
 ### `suggest`
 
 ```
-Usage: bki-bkg IR_FILE suggest [OPTIONS]
+Usage: radgeo backgrounds IR_FILE suggest [OPTIONS]
 
   Selections and regions that split the backgrounds, with the commands to run
   them.

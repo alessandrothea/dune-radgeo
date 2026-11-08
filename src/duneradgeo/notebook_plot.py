@@ -20,7 +20,7 @@ from .ir import IRCollection
 # Colour maps
 # ---------------------------------------------------------------------------
 
-# bki-plot's kind colours; struct volumes, coloured per name there, get one colour
+# radgeo plot's kind colours; struct volumes, coloured per name there, get one colour
 _KIND_COLOUR: dict[str, str] = dict(KIND_COLOUR, struct="mediumseagreen")
 _KIND_OPACITY: dict[str, float] = {
     "anode":  0.25,
@@ -138,7 +138,7 @@ def make_figure(ir: IRCollection, height: int = 900,
 
     All sub-plots share one legend (volumes grouped by kind + name).
 
-    With ``highlight`` (``[LABEL=]NAME_RE[#SEL]`` specs, as for bki-plot
+    With ``highlight`` (``[LABEL=]NAME_RE[#SEL]`` specs, as for radgeo plot
     --highlight) the matching volumes get one colour and legend group per
     spec and all others are drawn in grey with opacity ``dim``.
     """

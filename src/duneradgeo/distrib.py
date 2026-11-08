@@ -1,27 +1,27 @@
 """
-bki-distrib  —  draw the distrib_x/y/z position profiles stored in a JSON IR
+radgeo profiles  —  draw the distrib_x/y/z position profiles stored in a JSON IR
 
 RadioGen/Decay0Gen producers with a distrib_<axis> parameter draw that
 coordinate from a TF1 formula in x over the box range (TF1::GetRandom,
 larsimrad BaseRadioGen).  Each page shows the formula (TF1::Eval) and the
 distribution as generated, with the effective range of each marked (the
-generated one, shaded, is the box bki-extract writes).
+generated one, shaded, is the box radgeo extract writes).
 GetRandom samples from an Npx-point table (default 100), so features narrower
 than range/Npx are lost; see the duneradgeo._tf1 docstring.
 Producers sharing a formula and range share one plot: a page of the PDF, or
 one file per plot for other formats.  Needs PyROOT.  Not modelled: the redraw
 of points outside the volume_gen / material volumes.  Coordinates are world
 coordinates, as the generator samples them, also for IRs written with
-bki-extract --frame.
+radgeo extract --frame.
 
 
 Usage:
-  bki-distrib detector.json                     # -> detector_distrib.pdf
-  bki-distrib detector.json --out distrib.png --log   # distrib_0.png, …
-  bki-distrib detector.json --list              # text only, no matplotlib
-  bki-distrib detector.json --radio 'Mesh|Cathode'
+  radgeo profiles detector.json                     # -> detector_distrib.pdf
+  radgeo profiles detector.json --out distrib.png --log   # distrib_0.png, …
+  radgeo profiles detector.json --list              # text only, no matplotlib
+  radgeo profiles detector.json --radio 'Mesh|Cathode'
 
-Reads the distrib_* ranges, containment and Npx that bki-extract writes.
+Reads the distrib_* ranges, containment and Npx that radgeo extract writes.
 """
 from __future__ import annotations
 
@@ -84,7 +84,7 @@ _RANGES = ("range", "eff", "formula_eff")      # distrib_keys of the three range
 def collect(vols: list[VolumeEntry]) -> list[DistribGroup]:
     """Group the distrib_* entries of the radio volumes in `vols`.
 
-    Raises ValueError when an entry lacks the keys bki-extract writes."""
+    Raises ValueError when an entry lacks the keys radgeo extract writes."""
     groups: dict[tuple, DistribGroup] = {}
     for v in vols:
         if v.kind != "radio":
@@ -99,7 +99,7 @@ def collect(vols: list[VolumeEntry]) -> list[DistribGroup]:
             missing = [k for k in need if k not in m]
             if missing:
                 raise ValueError(f"{v.name}: IR entry lacks {', '.join(missing)}; "
-                                 f"re-run bki-extract")
+                                 f"re-run radgeo extract")
             rng, eff, feff = (tuple(map(float, m[keys[k]])) for k in _RANGES)
             cont, npx = float(m[DISTRIB_COMMON[0]]), int(m[DISTRIB_COMMON[1]])
             key = (axis, formula, _key_range(rng), _key_range(eff), _key_range(feff),
@@ -723,7 +723,7 @@ def _run(ir_file, out, list_, radio, pick, axis, npx, log, no_zoom, title) -> No
 @click.option("--radio", cls=VariadicOption, metavar="PATTERN...",
               help="Regex filter on radio producer names.")
 @click.option("--pick", cls=VariadicOption, metavar="SPEC...",
-              help="PRODUCER_RE#SEL as in bki-plot --surface (index list "
+              help="PRODUCER_RE#SEL as in radgeo plot --surface (index list "
                    "or @REGEX on surface, node, nuclide).")
 @click.option("--axis", cls=VariadicOption, type=click.Choice(list(DISTRIB_AXES)),
               metavar="{x,y,z}...",
@@ -745,7 +745,7 @@ def cli(ir_file, out, list_, radio, pick, axis, npx, log, no_zoom, title) -> Non
 
 
 def main(argv: list | None = None) -> None:
-    cli(args=argv, prog_name="bki-distrib")
+    cli(args=argv, prog_name="radgeo profiles")
 
 
 if __name__ == "__main__":

@@ -28,9 +28,9 @@ def _has_includes(text: str) -> bool:
 
 
 def default_fcl_cache_dir() -> str:
-    """``$XDG_CACHE_HOME/bki-extract/fcl`` (default ``~/.cache/bki-extract/fcl``)."""
+    """``$XDG_CACHE_HOME/radgeo/fcl`` (default ``~/.cache/radgeo/fcl``)."""
     base = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
-    return os.path.join(base, "bki-extract", "fcl")
+    return os.path.join(base, "radgeo", "fcl")
 
 
 def _cache_file(path: str, search_var: str, cache_dir: str) -> str:

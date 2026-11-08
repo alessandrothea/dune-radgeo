@@ -1,5 +1,5 @@
 """
-Shared pieces of the bki-* command lines, built on click and rich.
+Shared pieces of the radgeo command lines, built on click and rich.
 
 - ``CONTEXT_SETTINGS``: -h as well as --help.
 - ``CliError``: a message for the user, printed as ``[error] ...`` with exit

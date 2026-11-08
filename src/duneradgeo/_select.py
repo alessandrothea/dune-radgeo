@@ -1,5 +1,5 @@
 """
-Volume selection shared by bki-plot, bki-distrib and notebook_plot.
+Volume selection shared by radgeo plot, radgeo profiles and notebook_plot.
 
 Spec grammar:
   pick / surface   NAME_RE#SEL
@@ -108,7 +108,7 @@ def _spec_hits(v: VolumeEntry, indices: set[int] | None, match,
 
     An index list on a geometry volume raises ValueError ("geometry volumes
     are <verb> by path").  With `need_path`, so does an @REGEX on a geometry
-    volume without ``meta.path`` (an IR from an older bki-extract)."""
+    volume without ``meta.path`` (an IR from an older radgeo extract)."""
     m = v.meta
     if indices is not None:
         if v.kind != "radio":
@@ -121,7 +121,7 @@ def _spec_hits(v: VolumeEntry, indices: set[int] | None, match,
         if need_path and v.kind != "radio" and "path" not in m:
             raise ValueError(
                 f"{v.kind} volume '{v.name}' has no placement path; "
-                f"re-run bki-extract to pick geometry volumes")
+                f"re-run radgeo extract to pick geometry volumes")
         if any(match.search(str(m[k])) for k in _PICK_KEYS
                if m.get(k) is not None):
             return True
@@ -184,7 +184,7 @@ def select_volumes(
     picks: list[str] | None = None,
 ) -> list[VolumeEntry]:
     """
-    Apply the bki-plot selectors to ``ir.volumes`` (see
+    Apply the radgeo plot selectors to ``ir.volumes`` (see
     :func:`duneradgeo.plot.plot_ir` for their meaning).
     Raises ValueError when a pick spec cannot be applied to a volume or a
     name/kind pattern is not a valid regex.

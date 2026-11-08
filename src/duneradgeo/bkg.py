@@ -1,17 +1,17 @@
 """
-bki-bkg  —  inspect the radiological backgrounds of a JSON IR
+radgeo backgrounds  —  inspect the radiological backgrounds of a JSON IR
 
 A background is one radiological producer: the radio volumes of the IR that
 share its name (its sampling boxes) and its FHiCL parameters (IR "producers").
 
 Usage:
-  bki-bkg ir.json list                         # every background
-  bki-bkg ir.json show Po218 Cathode           # parameters and volumes (regex on names)
-  bki-bkg ir.json select nuclide=Po218 'BqPercc<0.01'
-  bki-bkg ir.json region --slice x=-328        # active on a plane
-  bki-bkg ir.json region --x -330 -300 --z 0 500
-  bki-bkg ir.json region --box -330 -300 -700 700 0 2000 --volumes
-  bki-bkg ir.json suggest                      # other selections worth trying
+  radgeo backgrounds ir.json list                         # every background
+  radgeo backgrounds ir.json show Po218 Cathode           # parameters and volumes (regex on names)
+  radgeo backgrounds ir.json select nuclide=Po218 'BqPercc<0.01'
+  radgeo backgrounds ir.json region --slice x=-328        # active on a plane
+  radgeo backgrounds ir.json region --x -330 -300 --z 0 500
+  radgeo backgrounds ir.json region --box -330 -300 -700 700 0 2000 --volumes
+  radgeo backgrounds ir.json suggest                      # other selections worth trying
 
 select EXPR:  FIELD=REGEX (re.search on any value of the field), FIELD!=REGEX
 (no value matches), FIELD<N, <=, >, >= (any numeric value), or a bare FIELD
@@ -340,7 +340,7 @@ def _plain_or_anchored(value: str, others: list) -> str:
 
 
 def _command(*words: str) -> str:
-    """The arguments of a bki-bkg command, shell-quoted (the IR file goes first)."""
+    """The arguments of a radgeo backgrounds command, shell-quoted (the IR file goes first)."""
     return " ".join(shlex.quote(w) for w in words)
 
 
@@ -520,7 +520,7 @@ def render_region(console, region: Region, rows: list, total: int, frame: str,
 def render_suggestions(console, d: dict, total: int) -> None:
     from rich.table import Table
     console.print(f"[bold]{total}[/bold] background(s).  Selections that split them; "
-                  f"run as [bold]bki-bkg IR_FILE <command>[/bold]:")
+                  f"run as [bold]radgeo backgrounds IR_FILE <command>[/bold]:")
     t = Table(header_style="bold", title="by field", title_justify="left")
     t.add_column("field", style="bold")
     t.add_column("value")
@@ -635,7 +635,7 @@ def _vol_rows(b: Background, idx: list) -> list:
 
 def _json_option(fn):
     """--json on a command: the same switch as the group's, so it can follow
-    the command name (bki-bkg IR_FILE select ... --json)."""
+    the command name (radgeo backgrounds IR_FILE select ... --json)."""
     def callback(ctx, param, value):
         if value:
             ctx.obj.as_json = True
@@ -644,16 +644,16 @@ def _json_option(fn):
 
 
 @click.group(cls=_Group, context_settings=CONTEXT_SETTINGS,
-             help="Inspect the radiological backgrounds of a JSON IR (bki-extract).\n\n"
+             help="Inspect the radiological backgrounds of a JSON IR (radgeo extract).\n\n"
                   "A background is one radiological producer: its radio volumes "
                   "(sampling boxes) and its FHiCL parameters.\n\n"
                   "\b\nExamples:\n"
-                  "  bki-bkg ir.json list\n"
-                  "  bki-bkg ir.json show Po218 Cathode\n"
-                  "  bki-bkg ir.json select nuclide=Po218 'BqPercc<0.01'\n"
-                  "  bki-bkg ir.json region --slice x=-328\n"
-                  "  bki-bkg ir.json region --x -330 -300 --z 0 500 --volumes\n"
-                  "  bki-bkg ir.json select material=LAr --json")
+                  "  radgeo backgrounds ir.json list\n"
+                  "  radgeo backgrounds ir.json show Po218 Cathode\n"
+                  "  radgeo backgrounds ir.json select nuclide=Po218 'BqPercc<0.01'\n"
+                  "  radgeo backgrounds ir.json region --slice x=-328\n"
+                  "  radgeo backgrounds ir.json region --x -330 -300 --z 0 500 --volumes\n"
+                  "  radgeo backgrounds ir.json select material=LAr --json")
 @click.argument("ir_file", metavar="IR_FILE", type=click.Path(dir_okay=False))
 @click.option("--json", "as_json", is_flag=True,
               help="Print JSON instead of tables (also accepted after the command; "
@@ -694,7 +694,7 @@ def show_cmd(sess: _Session, names: tuple, limit: int) -> None:
     chosen = [b for b in bgs if any(p.search(b.name) for p in pats)]
     if not chosen:
         raise BkgError(f"no background matches {', '.join(names)}; "
-                       f"see 'bki-bkg {sess.path} list'")
+                       f"see 'radgeo backgrounds {sess.path} list'")
     data = [detail(b, limit) for b in chosen]
 
     def render(console):
@@ -776,7 +776,7 @@ def suggest_cmd(sess: _Session) -> None:
 
 
 def main(argv: list | None = None) -> None:
-    cli(args=argv, prog_name="bki-bkg")
+    cli(args=argv, prog_name="radgeo backgrounds")
 
 
 if __name__ == "__main__":

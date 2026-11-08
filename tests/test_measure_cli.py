@@ -1,4 +1,4 @@
-"""Checks of the bki-measure command line (duneradgeo.measure) on a small
+"""Checks of the radgeo measure command line (duneradgeo.measure) on a small
 in-memory IR written to a temporary file; needs numpy, click and rich
 (skipped without them).  Run with pytest, or: python tests/test_measure_cli.py.
 """
@@ -108,7 +108,7 @@ def test_help():
     code, out = run("--help")
     assert code == 0
     for s in ("--list", "--detail", "-d", "--json FILE", "-h", "IR_FILE", "MEASUREMENT",
-              "Lengths are in cm", "bki-measure detector.json drift-gaps -d"):
+              "Lengths are in cm", "radgeo measure detector.json drift-gaps -d"):
         assert s in out
     assert run("-h")[1] == out
 

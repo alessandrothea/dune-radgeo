@@ -1,4 +1,4 @@
-# bki-distrib
+# radgeo profiles
 
 Draws the position profiles of the radiological producers that set
 `distrib_x`, `distrib_y` or `distrib_z`. In larsimrad's `BaseRadioGen`, each
@@ -6,13 +6,13 @@ of these is a 1D TF1 formula in the variable `x`. The generator samples it
 with `TF1::GetRandom` over the box range on that axis: `X0..X1` etc., the
 `volume_rand` bounding box, or each `volume_gen` node's box (see
 [radio boxes](../README.md#radio-boxes)). Axes without a formula are sampled uniformly.
-The IR comes from [bki-extract](bki-extract.md).
+The IR comes from [radgeo extract](radgeo-extract.md).
 
 ## Usage
 
 ```bash
-bki-distrib radbkg.json --log
-bki-distrib radbkg.json --list --radio 'UpperMesh'
+radgeo profiles radbkg.json --log
+radgeo profiles radbkg.json --list --radio 'UpperMesh'
 # ╭─ [0] UpperMesh1x8x14 · distrib_x ─────────────────────────────────────────
 # │ range [-425.120, 425.200]  containment 0.99  npx 100
 # │ eff_range (generated) [-323.082, -318.753]  (measured 0.9900)
@@ -28,29 +28,30 @@ bki-distrib radbkg.json --list --radio 'UpperMesh'
 ## Options
 
 ```
-Usage: bki-distrib [OPTIONS] IR_FILE
+Usage: radgeo profiles [OPTIONS] IR_FILE
 
-  bki-distrib  —  draw the distrib_x/y/z position profiles stored in a JSON IR
+  radgeo profiles  —  draw the distrib_x/y/z position profiles stored in a JSON
+  IR
 
   RadioGen/Decay0Gen producers with a distrib_<axis> parameter draw that
   coordinate from a TF1 formula in x over the box range (TF1::GetRandom,
   larsimrad BaseRadioGen).  Each page shows the formula (TF1::Eval) and the
   distribution as generated, with the effective range of each marked (the
-  generated one, shaded, is the box bki-extract writes). GetRandom samples from
-  an Npx-point table (default 100), so features narrower than range/Npx are
+  generated one, shaded, is the box radgeo extract writes). GetRandom samples
+  from an Npx-point table (default 100), so features narrower than range/Npx are
   lost; see the duneradgeo._tf1 docstring. Producers sharing a formula and range
   share one plot: a page of the PDF, or one file per plot for other formats.
   Needs PyROOT.  Not modelled: the redraw of points outside the volume_gen /
   material volumes.  Coordinates are world coordinates, as the generator samples
-  them, also for IRs written with bki-extract --frame.
+  them, also for IRs written with radgeo extract --frame.
 
   Usage:
-    bki-distrib detector.json                     # -> detector_distrib.pdf
-    bki-distrib detector.json --out distrib.png --log   # distrib_0.png, …
-    bki-distrib detector.json --list              # text only, no matplotlib
-    bki-distrib detector.json --radio 'Mesh|Cathode'
+    radgeo profiles detector.json                     # -> detector_distrib.pdf
+    radgeo profiles detector.json --out distrib.png --log   # distrib_0.png, …
+    radgeo profiles detector.json --list              # text only, no matplotlib
+    radgeo profiles detector.json --radio 'Mesh|Cathode'
 
-  Reads the distrib_* ranges, containment and Npx that bki-extract writes.
+  Reads the distrib_* ranges, containment and Npx that radgeo extract writes.
 
 Options:
   -o, --out FILE      Output file (default: <stem>_distrib.pdf): a PDF gets one
@@ -59,7 +60,7 @@ Options:
   -l, --list          Print the distributions, effective ranges and producers,
                       then exit (needs ROOT, not matplotlib).
   --radio PATTERN...  Regex filter on radio producer names.
-  --pick SPEC...      PRODUCER_RE#SEL as in bki-plot --surface (index list or
+  --pick SPEC...      PRODUCER_RE#SEL as in radgeo plot --surface (index list or
                       @REGEX on surface, node, nuclide).
   --axis {x,y,z}...   Only these axes (default: all present).
   --npx N             TF1 Npx for the generated distribution (default: the
@@ -74,7 +75,7 @@ Options:
   -h, --help          Show this message and exit.
 ```
 
-`--pick` takes the same specs as [`bki-plot --surface`](bki-plot.md#--surface-syntax).
+`--pick` takes the same specs as [`radgeo plot --surface`](radgeo-plot.md#--surface-syntax).
 
 ## The formula and the generated distribution (Npx)
 
@@ -97,7 +98,7 @@ decay vertices match the `GetRandom` table to 0.01 cm (`tests/test_tf1.py`
 holds the reference quantiles). Smooth profiles, such as the bulk LAr ones,
 are not affected.
 
-`bki-extract` records, per axis with a formula, the full range
+`radgeo extract` records, per axis with a formula, the full range
 (`distrib_<axis>_range`), the shortest interval holding `--containment` of the
 generated distribution (`distrib_<axis>_eff_range`, the effective range, which
 becomes the box on that axis) and the same for the formula
@@ -111,7 +112,7 @@ the liquid.
 
 ## Pages
 
-`bki-distrib` draws, over the full range, the formula (black) and the
+`radgeo profiles` draws, over the full range, the formula (black) and the
 generated distribution (blue), shades the generated effective range and
 marks the formula's (dotted), one distribution per page of the PDF. When the
 effective ranges are much narrower than the full range, a zoomed view on
@@ -135,5 +136,5 @@ both effective ranges, the containment (stored, and measured for each
 distribution), `Npx`, the generator volume (`meta.source`) and the producers
 with their nuclides.
 
-IR files must carry the `distrib_*` keys above: re-run `bki-extract` for older ones.
+IR files must carry the `distrib_*` keys above: re-run `radgeo extract` for older ones.
 [Back to the README](../README.md)

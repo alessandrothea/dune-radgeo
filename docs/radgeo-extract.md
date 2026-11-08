@@ -1,19 +1,19 @@
-# bki-extract
+# radgeo extract
 
-`bki-extract` reads a GDML geometry or a FHiCL job file and writes the JSON IR
+`radgeo extract` reads a GDML geometry or a FHiCL job file and writes the JSON IR
 ([format](../README.md#json-ir-format)) that the other commands read: the
 detector volumes (anode, optical detector, cathode, field shaper, structure) and,
 from a FHiCL job, the boxes in which its RadioGen / Decay0Gen producers
 generate, with each producer's full FHiCL table.  Further commands:
-[bki-plot](bki-plot.md), [bki-distrib](bki-distrib.md),
-[bki-measure](bki-measure.md), [bki-bkg](bki-bkg.md).
+[radgeo plot](radgeo-plot.md), [radgeo profiles](radgeo-profiles.md),
+[radgeo measure](radgeo-measure.md), [radgeo backgrounds](radgeo-backgrounds.md).
 
 ## Usage
 
 ```bash
-bki-extract geometry.gdml --out detector.json     # detector geometry only
-bki-extract job.fcl --out detector.json           # radio volumes + the job's geometry
-bki-extract job.fcl --gdml /path/to/geometry.gdml --out ir.json
+radgeo extract geometry.gdml --out detector.json     # detector geometry only
+radgeo extract job.fcl --out detector.json           # radio volumes + the job's geometry
+radgeo extract job.fcl --gdml /path/to/geometry.gdml --out ir.json
 ```
 
 Bare filenames are resolved via the LArSoft search paths (FHiCL:
@@ -25,14 +25,14 @@ click and rich, plus PyROOT for producers with `distrib_x/y/z`
 ## Options
 
 ```
-Usage: bki-extract [OPTIONS] INPUT
+Usage: radgeo extract [OPTIONS] INPUT
 
   Usage:
-    bki-extract geometry.gdml --out ir.json
-    bki-extract job.fcl       --out ir.json
-    bki-extract geometry.gdml --out ir.json \
+    radgeo extract geometry.gdml --out ir.json
+    radgeo extract job.fcl       --out ir.json
+    radgeo extract geometry.gdml --out ir.json \
         --anode-pattern 'volAnodePlate' --opdet-pattern '^volArapuca'
-    bki-extract geometry.gdml --out ir.json --frame volEnclosureTPC
+    radgeo extract geometry.gdml --out ir.json --frame volEnclosureTPC
 
   From a FCL file (#includes expanded by fhicl-dump, else via $FHICL_FILE_PATH):
     * RadioGen / Decay0Gen producers → kind="radio" volumes, and each
@@ -57,7 +57,7 @@ Usage: bki-extract [OPTIONS] INPUT
   volume_rand / volume_gen box is the ROOT bounding box of the volume's solid (a
   union: the whole composite), as BaseRadioGen samples it.
 
-  Output: a JSON IR, read by bki-plot, bki-distrib and the nb_B notebook.
+  Output: a JSON IR, read by radgeo plot, radgeo profiles and the nb_B notebook.
 
 Options:
   -o, --out OUT                   output JSON file (IR)  [required]
@@ -102,7 +102,7 @@ Options:
                                   [default: python]
   --fcl-cache DIR                 directory where expanded FCL files are cached
                                   and reused across runs  [default:
-                                  /home/user/.cache/bki-extract/fcl]
+                                  /home/user/.cache/radgeo/fcl]
   --no-fcl-cache                  always re-run the FCL expansion, ignoring the
                                   cache
   -v, --verbose
@@ -112,7 +112,7 @@ Options:
 `--containment` and `--npx` define the effective ranges of the producers with
 a `distrib_x/y/z` profile, stored as `meta.distrib_eff_containment` and
 `meta.distrib_eff_npx`; see
-[the formula and the generated distribution](bki-distrib.md#the-formula-and-the-generated-distribution-npx).
+[the formula and the generated distribution](radgeo-profiles.md#the-formula-and-the-generated-distribution-npx).
 The detector profile (and with it the default patterns) is auto-detected, see
 [Detector profiles](../README.md#detector-profiles).
 
@@ -121,7 +121,7 @@ The detector profile (and with it the default patterns) is auto-detected, see
 FHiCL files with `#include` directives are expanded automatically:
 `fhicl-dump` is used when available; otherwise includes are resolved inline
 via `$FHICL_FILE_PATH`. The expanded text is cached in
-`~/.cache/bki-extract/fcl/` (or `$XDG_CACHE_HOME/bki-extract/fcl/`) and
+`~/.cache/radgeo/fcl/` (or `$XDG_CACHE_HOME/radgeo/fcl/`) and
 reused on later runs. The cache is keyed on the top-level file's path, size
 and mtime plus `$FHICL_FILE_PATH`; edits to *included* files are not
 detected, so pass `--no-fcl-cache` after changing them. `--fcl-cache DIR`
@@ -130,37 +130,37 @@ moves the cache elsewhere.
 Override patterns or supply the GDML explicitly:
 
 ```bash
-bki-extract geometry.gdml --out ir.json \
+radgeo extract geometry.gdml --out ir.json \
     --anode-pattern '^volAnodePlate$' \
     --opdet-pattern '^volArapuca' \
     --struct volTPCActive volGaseousArgon volTPC volCryostat
 
-bki-extract job.fcl --gdml /path/to/geometry.gdml --out ir.json
+radgeo extract job.fcl --gdml /path/to/geometry.gdml --out ir.json
 ```
 
 ## Examples
 
 ```bash
 # geometry only, detector profile auto-detected from the GDML
-bki-extract geometry.gdml -o geo.json
+radgeo extract geometry.gdml -o geo.json
 
 # full background job: radio producers on the trigger paths + geometry
-bki-extract prodbackground_radio.fcl -o radio.json
+radgeo extract prodbackground_radio.fcl -o radio.json
 
 # only the producers whose label starts with "GenIn" ...
-bki-extract prodbackground_radio.fcl -o cathode.json --prefix GenIn
+radgeo extract prodbackground_radio.fcl -o cathode.json --prefix GenIn
 
 # ... or matching a regex, including producers not on any trigger path
-bki-extract prodbackground_radio.fcl -o rn.json --select 'Rn222|Po210' --all-configured
+radgeo extract prodbackground_radio.fcl -o rn.json --select 'Rn222|Po210' --all-configured
 
 # use a different geometry than the one named in AuxDetGeometry.GDML
-bki-extract prodbackground_radio.fcl -o radio.json --gdml /path/to/geometry.gdml
+radgeo extract prodbackground_radio.fcl -o radio.json --gdml /path/to/geometry.gdml
 
 # narrower effective ranges for producers with a distrib_x/y/z profile (95% containment)
-bki-extract prodbackground_radio.fcl -o radio.json --containment 0.95
+radgeo extract prodbackground_radio.fcl -o radio.json --containment 0.95
 
 # an included .fcl was edited: bypass the expansion cache
-bki-extract prodbackground_radio.fcl -o radio.json --no-fcl-cache
+radgeo extract prodbackground_radio.fcl -o radio.json --no-fcl-cache
 ```
 
 ## perl vs ggd VD GDML
@@ -174,12 +174,12 @@ geometry volume carries its placement `path` and, for ggd, its physvol name
 extract both in a common frame and compare them entry by entry.
 
 ```bash
-bki-extract dunevd10kt_3view_30deg_v7_refactored_2x8x40.gdml -o ref.json --frame volEnclosureTPC
-bki-extract dunevd10kt_v7_full10kt_ggd.gdml                 -o ggd.json --frame volEnclosureTPC
+radgeo extract dunevd10kt_3view_30deg_v7_refactored_2x8x40.gdml -o ref.json --frame volEnclosureTPC
+radgeo extract dunevd10kt_v7_full10kt_ggd.gdml                 -o ggd.json --frame volEnclosureTPC
 python scripts/compare_ir.py ref.json ggd.json -v     # exit status 1 if any group differs
 
 # ggd only: cryostat shell, insulation, I-beams, belts, shielding, cavern
-bki-extract dunevd10kt_v7_full10kt_ggd.gdml -o ggd_passive.json --with-passive
+radgeo extract dunevd10kt_v7_full10kt_ggd.gdml -o ggd_passive.json --with-passive
 ```
 
 ## GDML backends
@@ -210,8 +210,8 @@ path), exiting with status 1 on a difference:
 dsw -C <area> py /path/to/dune-radgeo/scripts/compare_backends.py geometry.gdml [more.gdml] [-v]
 
 # or through the IR
-dsw -C <area> exec bki-extract geometry.gdml -o /abs/py.json --gdml-backend python
-dsw -C <area> exec bki-extract geometry.gdml -o /abs/rt.json --gdml-backend root
+dsw -C <area> exec radgeo extract geometry.gdml -o /abs/py.json --gdml-backend python
+dsw -C <area> exec radgeo extract geometry.gdml -o /abs/rt.json --gdml-backend root
 dsw -C <area> exec python /path/to/dune-radgeo/scripts/compare_ir.py /abs/py.json /abs/rt.json
 ```
 

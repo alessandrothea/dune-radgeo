@@ -9,13 +9,13 @@ Inspect DUNE background sources without a LArSoft environment:
 - **radiological position profiles** — the `distrib_x/y/z` formulas of those
   producers, drawn over the range the generator samples
 - **background inspection** — list the backgrounds of an IR, select them on a
-  metadata field or a region, see [bki-bkg](docs/bki-bkg.md)
+  metadata field or a region, see [radgeo backgrounds](docs/radgeo-backgrounds.md)
 
 Python (NumPy + Matplotlib + Plotly), no LArSoft required.  PyROOT is needed
 for the `distrib_x/y/z` formulas, which are ROOT TF1 expressions and are
-evaluated by ROOT (see [bki-distrib](docs/bki-distrib.md)).  Optionally, the GDML can
+evaluated by ROOT (see [radgeo profiles](docs/radgeo-profiles.md)).  Optionally, the GDML can
 also be read with ROOT instead of the built-in parser (see
-[GDML backends](docs/bki-extract.md#gdml-backends)).
+[GDML backends](docs/radgeo-extract.md#gdml-backends)).
 
 ---
 ## Installation
@@ -37,9 +37,9 @@ uv sync --no-group root  # everything but ROOT
 pip install .            # everything but ROOT
 ```
 
-PyROOT is needed to evaluate `distrib_x/y/z` formulas (`bki-extract` on a FCL
-with such producers, `bki-distrib`, `tests/test_tf1.py`) and for
-`bki-extract --gdml-backend root`.  On the host it comes from the `root` pip
+PyROOT is needed to evaluate `distrib_x/y/z` formulas (`radgeo extract` on a FCL
+with such producers, `radgeo profiles`, `tests/test_tf1.py`) and for
+`radgeo extract --gdml-backend root`.  On the host it comes from the `root` pip
 wheel, a uv dependency group installed by default, not a package
 dependency: `pip` never installs it, so a dunesw area uses the stack's ROOT,
 never shadowed by the wheel.  The group's marker limits it to Python ≥ 3.14
@@ -50,7 +50,7 @@ prints an "alpha stage" warning on import; duneradgeo silences it.  Without
 PyROOT, the features that need it raise `ROOTUnavailable` (see
 [Python API](#python-api)).
 
-`bki-extract` of a geometry, or of producers without `distrib_*`, needs only
+`radgeo extract` of a geometry, or of producers without `distrib_*`, needs only
 NumPy, click and rich.  For an extraction-only install on top of a LArSoft
 Python that already provides NumPy and PyROOT, install without dependencies
 and add whichever of NumPy, click and rich is missing:
@@ -62,20 +62,20 @@ pip install --no-deps . numpy click rich
 | Package | Used by |
 |---------|---------|
 | `numpy` | everything |
-| `click` | the command line of every `bki-*` command |
-| `rich` | the messages and tables of every `bki-*` command (`bki-bkg --json` prints plain JSON) |
-| `matplotlib` | `bki-plot` and `bki-distrib` PDF/PNG output, `plot_ir` |
+| `click` | the command line of every `radgeo` command |
+| `rich` | the messages and tables of every `radgeo` command (`radgeo backgrounds --json` prints plain JSON) |
+| `matplotlib` | `radgeo plot` and `radgeo profiles` PDF/PNG output, `plot_ir` |
 | `plotly` | `make_figure` |
 | `jupyter`, `nbconvert` | `nb_B.ipynb`, `scripts/run_notebook.py` |
-| `root` (group) | `distrib_*` formulas: `bki-extract` of producers with `distrib_*`, `bki-distrib`, `tests/test_tf1.py`.  `bki-extract --gdml-backend root` and `scripts/compare_backends.py` need a ROOT with TGeo/GDML (dunesw) |
+| `root` (group) | `distrib_*` formulas: `radgeo extract` of producers with `distrib_*`, `radgeo profiles`, `tests/test_tf1.py`.  `radgeo extract --gdml-backend root` and `scripts/compare_backends.py` need a ROOT with TGeo/GDML (dunesw) |
 
-`bki-plot --list` / `-L` and `bki-distrib --list` need no matplotlib.  In a
+`radgeo plot --list` / `-L` and `radgeo profiles --list` need no matplotlib.  In a
 `--no-deps` install, rendering a plot without matplotlib stops with an
 `ImportError` that says what to install.
 
 ### In a dunesw area
 
-To run `bki-extract` with the area's `$FHICL_FILE_PATH`, `$FW_SEARCH_PATH` and
+To run `radgeo extract` with the area's `$FHICL_FILE_PATH`, `$FW_SEARCH_PATH` and
 `fhicl-dump`, install it into the area's venv with `scripts/dunesw_installme.sh`.
 The script does an editable `--no-deps` install, and NumPy comes from the
 stack. The commands need click and rich: the dunesw area has `rich` but not
@@ -84,7 +84,7 @@ import. With `dsw`:
 
 ```bash
 dsw -C <area> exec bash /path/to/dune-radgeo/scripts/dunesw_installme.sh
-dsw -C <area> exec bki-extract <job>.fcl --out /abs/path/detector.json
+dsw -C <area> exec radgeo extract <job>.fcl --out /abs/path/detector.json
 ```
 
 Add `--no-editable` for a regular install. Any other arguments are passed to
@@ -100,12 +100,12 @@ Without installing anything, you can also run from the source tree:
 `dsw -C <area> exec env PYTHONPATH=/path/to/dune-radgeo/src python -m duneradgeo.extract ...`.
 
 The area's ROOT has TGeo/GDML, so `--gdml-backend root` and
-`scripts/compare_backends.py` work there (`dsw -C <area> exec bki-extract
+`scripts/compare_backends.py` work there (`dsw -C <area> exec radgeo extract
 geometry.gdml -o /abs/ir.json --gdml-backend root`).
 
-`bki-plot` and `bki-distrib` plots need matplotlib, which the area does not
-have: plot the JSON on the host with `uv run bki-plot` / `uv run bki-distrib`.
-`bki-distrib --list` works in the area (it uses the area's ROOT).
+`radgeo plot` and `radgeo profiles` plots need matplotlib, which the area does not
+have: plot the JSON on the host with `uv run radgeo plot` / `uv run radgeo profiles`.
+`radgeo profiles --list` works in the area (it uses the area's ROOT).
 If the script cannot install click (no network), do it by hand with
 `env -u PYTHONPATH python -m pip install click rich` in the area.
 
@@ -121,46 +121,46 @@ regardless).
 
 ```bash
 # From a GDML file (detector geometry only)
-bki-extract geometry.gdml --out detector.json
+radgeo extract geometry.gdml --out detector.json
 
 # From a FHiCL job file (radio volumes + geometry via AuxDetGeometry.GDML)
-bki-extract job.fcl --out detector.json
+radgeo extract job.fcl --out detector.json
 ```
 
 Bare filenames are resolved via the LArSoft search paths
 ([File search paths](#file-search-paths)).  `#include` expansion and its
 cache, pattern overrides, `--frame`, `--with-passive` and the GDML backends are
-in [bki-extract](docs/bki-extract.md).
+in [radgeo extract](docs/radgeo-extract.md).
 
 ### 2. Render static PDF
 
 ```bash
-bki-plot detector.json --out detector.pdf
-bki-plot detector.json --out detector.pdf --view 30 -45
+radgeo plot detector.json --out detector.pdf
+radgeo plot detector.json --out detector.pdf --view 30 -45
 ```
 
 A 3D view and three 2D views; selectors, highlighting and listings are in
-[bki-plot](docs/bki-plot.md).
+[radgeo plot](docs/radgeo-plot.md).
 
 ### 3. Radiological position profiles
 
 ```bash
-bki-distrib detector.json            # detector_distrib.pdf, one page per distribution
-bki-distrib detector.json --list     # the same as text
+radgeo profiles detector.json            # detector_distrib.pdf, one page per distribution
+radgeo profiles detector.json --list     # the same as text
 ```
 
-See [bki-distrib](docs/bki-distrib.md).
+See [radgeo profiles](docs/radgeo-profiles.md).
 
 ### 4. Inspect the backgrounds
 
 ```bash
-bki-bkg radbkg.json list                       # every background
-bki-bkg radbkg.json select nuclide=Po218       # on a metadata field
-bki-bkg radbkg.json region --slice x=-328      # active on a plane
-bki-bkg radbkg.json suggest                    # other selections worth trying
+radgeo backgrounds radbkg.json list                       # every background
+radgeo backgrounds radbkg.json select nuclide=Po218       # on a metadata field
+radgeo backgrounds radbkg.json region --slice x=-328      # active on a plane
+radgeo backgrounds radbkg.json suggest                    # other selections worth trying
 ```
 
-See [bki-bkg](docs/bki-bkg.md).
+See [radgeo backgrounds](docs/radgeo-backgrounds.md).
 
 ### 5. Interactive notebook
 
@@ -183,11 +183,11 @@ can also save a static matplotlib PDF.
 
 | Command | What it does | Documentation |
 |---------|--------------|---------------|
-| `bki-extract` | GDML / FHiCL → JSON IR | [docs/bki-extract.md](docs/bki-extract.md) |
-| `bki-plot` | IR → static PDF/PNG, listings, selectors, highlighting | [docs/bki-plot.md](docs/bki-plot.md) |
-| `bki-measure` | geometric measurements on an IR | [docs/bki-measure.md](docs/bki-measure.md) |
-| `bki-distrib` | `distrib_x/y/z` position profiles | [docs/bki-distrib.md](docs/bki-distrib.md) |
-| `bki-bkg` | list, select and locate the backgrounds of an IR | [docs/bki-bkg.md](docs/bki-bkg.md) |
+| `radgeo extract` | GDML / FHiCL → JSON IR | [docs/radgeo-extract.md](docs/radgeo-extract.md) |
+| `radgeo plot` | IR → static PDF/PNG, listings, selectors, highlighting | [docs/radgeo-plot.md](docs/radgeo-plot.md) |
+| `radgeo measure` | geometric measurements on an IR | [docs/radgeo-measure.md](docs/radgeo-measure.md) |
+| `radgeo profiles` | `distrib_x/y/z` position profiles | [docs/radgeo-profiles.md](docs/radgeo-profiles.md) |
+| `radgeo backgrounds` | list, select and locate the backgrounds of an IR | [docs/radgeo-backgrounds.md](docs/radgeo-backgrounds.md) |
 
 Each page opens with a description and usage, then the command's `--help`
 (checked against the code by `tests/test_docs.py`), then its examples and
@@ -196,23 +196,23 @@ be here:
 
 | Section | Now in |
 |---------|--------|
-| Usage examples: extracting an IR | [bki-extract](docs/bki-extract.md#examples) |
-| perl vs ggd VD GDML | [bki-extract](docs/bki-extract.md#perl-vs-ggd-vd-gdml) |
-| GDML backends | [bki-extract](docs/bki-extract.md#gdml-backends) |
-| FHiCL expansion and cache | [bki-extract](docs/bki-extract.md#fhicl-input) |
-| Inspecting an IR (`-l` / `-L`) | [bki-plot](docs/bki-plot.md#inspecting-an-ir) |
-| Plotting the detector, backgrounds, generation surfaces | [bki-plot](docs/bki-plot.md#plotting-the-detector) |
-| `--surface` syntax | [bki-plot](docs/bki-plot.md#--surface-syntax) |
-| Picking individual placements | [bki-plot](docs/bki-plot.md#picking-individual-placements) |
-| Highlighting volumes | [bki-plot](docs/bki-plot.md#highlighting-volumes) |
-| Adding a measurement | [bki-measure](docs/bki-measure.md#adding-a-measurement) |
-| The formula and the generated distribution (Npx) | [bki-distrib](docs/bki-distrib.md#the-formula-and-the-generated-distribution-npx) |
+| Usage examples: extracting an IR | [radgeo extract](docs/radgeo-extract.md#examples) |
+| perl vs ggd VD GDML | [radgeo extract](docs/radgeo-extract.md#perl-vs-ggd-vd-gdml) |
+| GDML backends | [radgeo extract](docs/radgeo-extract.md#gdml-backends) |
+| FHiCL expansion and cache | [radgeo extract](docs/radgeo-extract.md#fhicl-input) |
+| Inspecting an IR (`-l` / `-L`) | [radgeo plot](docs/radgeo-plot.md#inspecting-an-ir) |
+| Plotting the detector, backgrounds, generation surfaces | [radgeo plot](docs/radgeo-plot.md#plotting-the-detector) |
+| `--surface` syntax | [radgeo plot](docs/radgeo-plot.md#--surface-syntax) |
+| Picking individual placements | [radgeo plot](docs/radgeo-plot.md#picking-individual-placements) |
+| Highlighting volumes | [radgeo plot](docs/radgeo-plot.md#highlighting-volumes) |
+| Adding a measurement | [radgeo measure](docs/radgeo-measure.md#adding-a-measurement) |
+| The formula and the generated distribution (Npx) | [radgeo profiles](docs/radgeo-profiles.md#the-formula-and-the-generated-distribution-npx) |
 
 ---
 
 ## JSON IR format
 
-`bki-extract` writes a JSON file with this structure:
+`radgeo extract` writes a JSON file with this structure:
 
 ```json
 {
@@ -260,15 +260,15 @@ be here:
 | `pos`  | centre `[x, y, z]` in cm, in the IR frame |
 | `ext`  | full extents `[dx, dy, dz]` in cm |
 | `rot`  | 3×3 rotation matrix in the IR frame |
-| `meta` | kind-specific metadata: GDML placement `path` for geometry volumes (see [Picking individual placements](docs/bki-plot.md#picking-individual-placements)) and, when the GDML names its physvols (ggd), the physvol name `pv` and the physvol names along the path `pvpath` (`placeDetEnclosure/…/volTPC_PV_Bot0/volTPCPlaneU_PV`); nuclide, BqPercc, surface, index, … for radio |
+| `meta` | kind-specific metadata: GDML placement `path` for geometry volumes (see [Picking individual placements](docs/radgeo-plot.md#picking-individual-placements)) and, when the GDML names its physvols (ggd), the physvol name `pv` and the physvol names along the path `pvpath` (`placeDetEnclosure/…/volTPC_PV_Bot0/volTPCPlaneU_PV`); nuclide, BqPercc, surface, index, … for radio |
 
 For radio entries, `meta` also holds, for each axis with a `distrib_<axis>`
 formula: the formula, `distrib_<axis>_range` (the full box range it is
 sampled over, the source of truth), `distrib_<axis>_eff_range` and
 `distrib_<axis>_formula_eff_range`, plus `distrib_eff_containment` and
 `distrib_eff_npx` (see [the formula and the generated
-distribution](docs/bki-distrib.md#the-formula-and-the-generated-distribution-npx)). The
-effective ranges are derived by `bki-extract` with ROOT, not module
+distribution](docs/radgeo-profiles.md#the-formula-and-the-generated-distribution-npx)). The
+effective ranges are derived by `radgeo extract` with ROOT, not module
 parameters. These are world coordinates. The box (`pos`/`ext`) is the full
 box on the axes without a formula and the generated effective range on the
 others.
@@ -279,7 +279,7 @@ even when none of the producer's boxes resolve. The `name` of a radio volume
 is its producer label. ±inf values are stored as the strings `"inf"` and
 `"-inf"`.
 
-`frame` is present only for IRs written with [`bki-extract --frame VOLNAME`](docs/bki-extract.md).
+`frame` is present only for IRs written with [`radgeo extract --frame VOLNAME`](docs/radgeo-extract.md).
 The IR frame is then that volume's local frame; `frame.pos` / `frame.rot`
 are its world placement (`world = pos + rot @ local`).  Without `frame`,
 the IR frame is the world.  `meta.path` always starts at the world volume.
@@ -351,7 +351,7 @@ radios = ir.by_kind("radio")
 fig = make_figure(ir)
 fig.show()
 
-# static matplotlib PDF (same layout as bki-plot)
+# static matplotlib PDF (same layout as radgeo plot)
 plot_ir(ir, "detector.pdf")
 plot_ir(ir, "detector_stretched.pdf", proportional=False)
 plot_ir(ir, "detector_vd.pdf", orientation="vd")   # drift axis x vertical
@@ -377,7 +377,7 @@ sub = IRCollection(source=ir.source, detector=ir.detector,
 make_figure(sub).show()
 ```
 
-Position profiles (`bki-distrib`; needs PyROOT):
+Position profiles (`radgeo profiles`; needs PyROOT):
 
 ```python
 from duneradgeo.distrib import collect, fractions, plot_groups, profile, with_npx
@@ -393,7 +393,7 @@ plot_groups(groups, "profiles.pdf", log=True)           # one page per group
 `g.dist` is the group's formula as a `Distribution` of the internal module
 `duneradgeo._tf1`: one formula on one range with one Npx, which owns its
 TF1 (see [the formula and the generated
-distribution](docs/bki-distrib.md#the-formula-and-the-generated-distribution-npx)).
+distribution](docs/radgeo-profiles.md#the-formula-and-the-generated-distribution-npx)).
 `_tf1.distribution(formula, lo, hi, npx=100)` returns the same object for
 the same arguments (the 256 most recent are cached;
 `distribution.cache_clear()` drops them).
@@ -425,14 +425,14 @@ Errors:
   placed exactly once, a `distrib_*` producer without PyROOT, nothing
   extracted).  The extraction steps (the internal `_gdml_volumes`,
   `_fcl_radio_volumes`, `_to_frame`) raise it instead of exiting, so they
-  can be called from Python; `bki-extract` prints it as `[error] …` and
+  can be called from Python; `radgeo extract` prints it as `[error] …` and
   exits with status 1.
 
 Internal modules shared by the commands:
 
 | Module | Contents |
 |--------|----------|
-| `duneradgeo._select` | the selectors of `bki-plot`, `bki-distrib` and `make_figure`: `select_volumes`, `parse_pick_spec`, `parse_highlight_spec`, `validate_picks`, `highlight_groups` |
+| `duneradgeo._select` | the selectors of `radgeo plot`, `radgeo profiles` and `make_figure`: `select_volumes`, `parse_pick_spec`, `parse_highlight_spec`, `validate_picks`, `highlight_groups` |
 | `duneradgeo._style` | colours and palettes (`KIND_COLOUR`, `STRUCT_PALETTE`, `SURFACE_PALETTE`, `CONTEXT_COL`, …) and `import_mpl()`, the matplotlib import with an install hint |
 | `duneradgeo._draw` | `aabb(pos, ext, rot)`: the (lo, hi) envelope of a rotated box's 8 corners; `box_corners_world` |
 | `duneradgeo._tf1` | `Distribution`, `distribution()`, `GENERATOR_NPX` (100) |
@@ -498,11 +498,11 @@ Both mirror LArSoft's `cet::search_path` behaviour (first-match-wins).
 |------|--------|-------|
 | `tests/test_tf1.py` | `duneradgeo._tf1`: the generated distribution against a `lar` Decay0Gen reference, the formula, caching and TF1 ownership | PyROOT |
 | `tests/test_fcl.py` | the FHiCL parser, `#include` expansion and `producer_volumes` (on a small GDML of boxes) | nothing (ROOT-free) |
-| `tests/test_formula_lines.py` | the formula text layout of the `bki-distrib` pages | nothing (ROOT-free) |
+| `tests/test_formula_lines.py` | the formula text layout of the `radgeo profiles` pages | nothing (ROOT-free) |
 | `tests/test_select.py` | the `--pick` / `--surface` / `--highlight` specs and `select_volumes` | nothing (ROOT-free) |
-| `tests/test_cli.py`, `tests/test_extract_cli.py`, `tests/test_plot_cli.py`, `tests/test_measure_cli.py`, `tests/test_distrib_cli.py`, `tests/test_scripts_cli.py` | the click/rich command lines of the `bki-*` commands and scripts | click and rich (skipped without them) |
+| `tests/test_cli.py`, `tests/test_extract_cli.py`, `tests/test_plot_cli.py`, `tests/test_measure_cli.py`, `tests/test_distrib_cli.py`, `tests/test_scripts_cli.py` | the click/rich command lines of the `radgeo` commands and scripts | click and rich (skipped without them) |
 | `tests/test_docs.py` | the `--help` text of each command is in its `docs/` page; the links between README and `docs/` resolve | the help check needs click and rich |
-| `tests/test_bkg.py` | `bki-bkg`: backgrounds, select expressions, regions, suggestions, `--json` output | nothing; the table rendering needs `rich` (skipped without it) |
+| `tests/test_bkg.py` | `radgeo backgrounds`: backgrounds, select expressions, regions, suggestions, `--json` output | nothing; the table rendering needs `rich` (skipped without it) |
 
 Each file runs on its own or under pytest (not a dependency).  On the host:
 

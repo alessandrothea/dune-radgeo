@@ -1,4 +1,4 @@
-"""Checks of the bki-plot command line (duneradgeo.plot): option syntax,
+"""Checks of the radgeo plot command line (duneradgeo.plot): option syntax,
 --list / --list-detail tables and the error exits.
 
 Run with pytest, or directly: python tests/test_plot_cli.py.  The IR is a
@@ -102,7 +102,7 @@ def test_help():
     res = CliRunner().invoke(plot.cli, ["-h"])
     assert res.exit_code == 0
     for s in ("--list-detail", "--view", "--no-proportional", "--zoom-highlight",
-              "--highlight", "--pick", "hd|vd|auto", "bki-plot detector.json"):
+              "--highlight", "--pick", "hd|vd|auto", "radgeo plot detector.json"):
         assert s in res.output, s
 
 

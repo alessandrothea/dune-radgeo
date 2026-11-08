@@ -377,7 +377,7 @@ def test_select_index_on_geometry_raises():
     msg = raises(ValueError, select_volumes, make_ir(), picks=["^volAnodePlate#0"])
     assert msg == ("index selector matches anode volume 'volAnodePlate'; "
                    "geometry volumes are picked by path (NAME_RE#@REGEX)"), msg
-    # the kinds filter runs first: bki-distrib (kinds=["radio"]) does not see it
+    # the kinds filter runs first: radgeo profiles (kinds=["radio"]) does not see it
     got = select_volumes(make_ir(), kinds=["radio"], picks=["^vol#0", "^K42#0"])
     assert ids(got) == [("Ar39GenInLAr", 0), ("K42Gen", 0)]
 
@@ -385,7 +385,7 @@ def test_select_index_on_geometry_raises():
 def test_select_no_path_raises():
     msg = raises(ValueError, select_volumes, make_ir(), picks=["Arapuca#@_pv"])
     assert msg == ("opdet volume 'volOldArapuca' has no placement path; "
-                   "re-run bki-extract to pick geometry volumes"), msg
+                   "re-run radgeo extract to pick geometry volumes"), msg
     # radio volumes need no path
     assert select_volumes(make_ir(), kinds=["radio"], picks=["Gen#@K42"])
 

@@ -1,4 +1,4 @@
-"""Checks of bki-bkg (duneradgeo.bkg): the background model, select
+"""Checks of radgeo backgrounds (duneradgeo.bkg): the background model, select
 expressions, regions, suggestions and the commands' output.
 
 Run with pytest, or directly: python tests/test_bkg.py.  The IR is a small
@@ -15,7 +15,7 @@ import tempfile
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-if importlib.util.find_spec("click") is None:     # bki-bkg needs click
+if importlib.util.find_spec("click") is None:     # radgeo backgrounds needs click
     try:
         import pytest
         pytest.skip("click is not installed", allow_module_level=True)
@@ -241,12 +241,12 @@ def test_anchored_value_regex():
 # --- command line ----------------------------------------------------------
 
 def run(*argv) -> tuple:
-    """(exit code, stdout, stdout + stderr) of `bki-bkg IR_FILE *argv` on make_ir()."""
+    """(exit code, stdout, stdout + stderr) of `radgeo backgrounds IR_FILE *argv` on make_ir()."""
     from click.testing import CliRunner
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "ir.json")
         make_ir().save(path)
-        res = CliRunner().invoke(bkg.cli, [path, *argv], prog_name="bki-bkg")
+        res = CliRunner().invoke(bkg.cli, [path, *argv], prog_name="radgeo backgrounds")
     return res.exit_code, res.stdout, res.output
 
 
@@ -303,7 +303,7 @@ def test_negative_numbers_and_help():
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "ir.json")
         make_ir().save(path)
-        res = CliRunner().invoke(bkg.cli, ["--json", path, "list"], prog_name="bki-bkg")
+        res = CliRunner().invoke(bkg.cli, ["--json", path, "list"], prog_name="radgeo backgrounds")
     assert res.exit_code == 0 and len(json.loads(res.stdout)) == 4
     code, out, _ = run("select", "--help")                       # works without loading the IR
     assert code == 0 and "FIELD=REGEX" in out

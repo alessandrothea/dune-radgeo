@@ -1,13 +1,13 @@
 """
-bki-extract  —  extract detector & radiological volumes → JSON IR
+radgeo extract  —  extract detector & radiological volumes → JSON IR
 
 \b
 Usage:
-  bki-extract geometry.gdml --out ir.json
-  bki-extract job.fcl       --out ir.json
-  bki-extract geometry.gdml --out ir.json \\
+  radgeo extract geometry.gdml --out ir.json
+  radgeo extract job.fcl       --out ir.json
+  radgeo extract geometry.gdml --out ir.json \\
       --anode-pattern 'volAnodePlate' --opdet-pattern '^volArapuca'
-  bki-extract geometry.gdml --out ir.json --frame volEnclosureTPC
+  radgeo extract geometry.gdml --out ir.json --frame volEnclosureTPC
 
 \b
 From a FCL file (#includes expanded by fhicl-dump, else via $FHICL_FILE_PATH):
@@ -33,7 +33,7 @@ field-shaper ring), subtractions and intersections their first operand.  A
 radio volume_rand / volume_gen box is the ROOT bounding box of the volume's
 solid (a union: the whole composite), as BaseRadioGen samples it.
 
-Output: a JSON IR, read by bki-plot, bki-distrib and the nb_B notebook.
+Output: a JSON IR, read by radgeo plot, radgeo profiles and the nb_B notebook.
 """
 from __future__ import annotations
 
@@ -273,7 +273,7 @@ def _json_safe(v):
 # ---------------------------------------------------------------------------
 
 def main(argv: list | None = None) -> None:
-    cli(args=argv, prog_name="bki-extract")
+    cli(args=argv, prog_name="radgeo extract")
 
 
 def _patterns(values) -> list[str] | None:

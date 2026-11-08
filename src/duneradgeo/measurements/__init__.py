@@ -1,5 +1,5 @@
 """
-Geometric measurements on an IR, run by bki-measure.
+Geometric measurements on an IR, run by radgeo measure.
 
 Each measurement lives in its own module in this package and registers
 itself with ``@measurement("name", "one-line help")``.  Every module here

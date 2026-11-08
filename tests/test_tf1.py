@@ -53,7 +53,7 @@ def test_invalid_formula():
 
 
 def test_narrow_peak_accepted():
-    """bki-distrib validates a formula by its norm on the dense formula grid:
+    """radgeo profiles validates a formula by its norm on the dense formula grid:
     a peak much narrower than the range is valid, although it vanishes at lo,
     mid and hi (a 3-point integral of it is 0); its effective range comes
     from the same grid."""

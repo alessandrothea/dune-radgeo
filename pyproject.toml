@@ -8,23 +8,23 @@ authors = [
 ]
 requires-python = ">=3.9"
 
-# Full install: bki-extract, bki-plot, bki-measure, bki-distrib, bki-bkg and the notebook.
-# Every command line is click + rich.  bki-extract needs only numpy, click and
+# Full install: radgeo extract, radgeo plot, radgeo measure, radgeo profiles, radgeo backgrounds and the notebook.
+# Every command line is click + rich.  radgeo extract needs only numpy, click and
 # rich, plus PyROOT (the root group below, or a dunesw area's ROOT) for
 # producers with distrib_x/y/z: pip install --no-deps . numpy click rich
 dependencies = [
-    "numpy",       # bki-extract, bki-plot --list / -L
-    "click",       # the command lines (bki-*, scripts/)
+    "numpy",       # radgeo extract, radgeo plot --list / -L
+    "click",       # the command lines (radgeo, scripts/)
     "rich",        # messages and tables of the commands
-    "matplotlib",  # bki-plot rendering, plot_ir
+    "matplotlib",  # radgeo plot rendering, plot_ir
     "plotly",      # notebook_plot.make_figure
     "jupyter",     # notebooks/nb_B.ipynb, scripts/run_notebook.py
     "nbconvert",
 ]
 
 # PyROOT for the host venv, from the `root` pip wheel: it evaluates the
-# distrib_x/y/z TF1 formulas (bki-extract of producers with distrib_*,
-# bki-distrib, tests/test_tf1.py) and is the ROOT that --gdml-backend root
+# distrib_x/y/z TF1 formulas (radgeo extract of producers with distrib_*,
+# radgeo profiles, tests/test_tf1.py) and is the ROOT that --gdml-backend root
 # imports, although the current wheels (0.1a12) lack TGeo/GDML, so that
 # backend works only with a full ROOT such as a dunesw area's.
 # A dependency group, not a package dependency: `uv sync` installs it by
@@ -39,11 +39,7 @@ root = ["root>=0.1a12; python_version >= '3.14'"]
 default-groups = ["root"]
 
 [project.scripts]
-bki-extract = "duneradgeo.extract:main"
-bki-plot    = "duneradgeo.plot:main"
-bki-measure = "duneradgeo.measure:main"
-bki-distrib = "duneradgeo.distrib:main"
-bki-bkg     = "duneradgeo.bkg:main"
+radgeo      = "duneradgeo.cli:main"
 
 [build-system]
 requires = ["hatchling"]

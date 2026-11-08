@@ -1,4 +1,4 @@
-"""Checks of the command line of bki-distrib (duneradgeo.distrib, click + rich):
+"""Checks of the command line of radgeo profiles (duneradgeo.distrib, click + rich):
 option syntax, error exits, --help and the --list blocks.
 
 Run with pytest, or directly: python tests/test_distrib_cli.py.  Needs click
@@ -119,12 +119,12 @@ def test_help():
     for flag in ("--help", "-h"):
         code, out = run(flag)
         assert code == 0
-        for text in ("bki-distrib", "IR_FILE", "--out", "-o", "--list", "-l",
+        for text in ("radgeo profiles", "IR_FILE", "--out", "-o", "--list", "-l",
                      "--radio PATTERN...", "--pick SPEC...", "--axis {x,y,z}...",
                      "--npx N", "--log", "--no-zoom", "--title",
                      "<stem>_NN<suffix>", "needs ROOT, not matplotlib",
                      "PRODUCER_RE#SEL", "distrib_eff_npx", "narrower than half",
-                     "bki-distrib detector.json --list", "Needs PyROOT"):
+                     "radgeo profiles detector.json --list", "Needs PyROOT"):
             assert text in " ".join(out.split()) or text in out, text
 
 

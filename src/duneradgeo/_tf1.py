@@ -1,7 +1,7 @@
 """ROOT TF1 evaluation of the RadioGen/Decay0Gen distrib_x/y/z formulas.
 
 The code's one full account of how the generator samples these formulas (the
-other modules point here; docs/bki-distrib.md is the user-facing account).
+other modules point here; docs/radgeo-profiles.md is the user-facing account).
 
 larsimrad's BaseRadioGen samples each axis independently.  distrib_<axis> is
 a 1D formula in the variable x, built as ``TF1(name, formula, lo, hi)`` over
@@ -35,7 +35,7 @@ range): :meth:`~Distribution.formula_pdf`,
 :meth:`~Distribution.formula_interval`, :meth:`~Distribution.formula_fraction`.
 
 An effective range is the shortest interval holding a fraction `containment`
-of a distribution.  bki-extract writes both, per axis: that of the generated
+of a distribution.  radgeo extract writes both, per axis: that of the generated
 distribution (``distrib_<axis>_eff_range``, which becomes the box on that
 axis) and that of the formula (``distrib_<axis>_formula_eff_range``).  For the
 mesh Gaussian at 0.99 they are [-323.08, -318.75] and [-321.70, -318.33] cm;

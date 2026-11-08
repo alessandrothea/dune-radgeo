@@ -1,5 +1,5 @@
 """
-bki-plot  —  render a JSON IR as a matplotlib PDF
+radgeo plot  —  render a JSON IR as a matplotlib PDF
 
 Produces the same 3D + 3×2D layout as the original plot_gdml_detectors.py:
                  --orientation hd (default)   --orientation vd (x vertical)
@@ -9,9 +9,9 @@ Produces the same 3D + 3×2D layout as the original plot_gdml_detectors.py:
   bot-right      X–Y  side view               Y–X  side view
 
 Usage:
-  bki-plot detector.json --out detector.pdf
-  bki-plot detector.json --out detector.pdf --view 20 -60
-  bki-plot detector.json --highlight 'bottom planes=^volTPCPlane#@volTPC_PV_Bot'
+  radgeo plot detector.json --out detector.pdf
+  radgeo plot detector.json --out detector.pdf --view 20 -60
+  radgeo plot detector.json --highlight 'bottom planes=^volTPCPlane#@volTPC_PV_Bot'
 """
 from __future__ import annotations
 
@@ -511,9 +511,9 @@ Produces the same 3D + 3x2D layout as the original plot_gdml_detectors.py:
 
 \b
 Usage:
-  bki-plot detector.json --out detector.pdf
-  bki-plot detector.json --out detector.pdf --view 20 -60
-  bki-plot detector.json --highlight 'bottom planes=^volTPCPlane#@volTPC_PV_Bot'
+  radgeo plot detector.json --out detector.pdf
+  radgeo plot detector.json --out detector.pdf --view 20 -60
+  radgeo plot detector.json --highlight 'bottom planes=^volTPCPlane#@volTPC_PV_Bot'
 """
 
 
@@ -593,7 +593,7 @@ def cli(ir_file, do_list, do_list_detail, out, view, title, proportional,
         raise CliError(f"'{ir_file}' not found")
     if ir_path.suffix.lower() != ".json":
         raise CliError(f"'{ir_path.name}' is not a JSON IR file — "
-                       f"run bki-extract first to produce one")
+                       f"run radgeo extract first to produce one")
 
     name, surface, pick, highlight = (list(x) or None
                                       for x in (name, surface, pick, highlight))
@@ -654,7 +654,7 @@ def cli(ir_file, do_list, do_list_detail, out, view, title, proportional,
 
 
 def main(argv: list | None = None) -> None:
-    cli.main(args=argv, prog_name="bki-plot")
+    cli.main(args=argv, prog_name="radgeo plot")
 
 
 if __name__ == "__main__":

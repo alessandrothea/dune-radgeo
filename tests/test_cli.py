@@ -1,4 +1,4 @@
-"""Checks of duneradgeo._cli, the click/rich helpers shared by the bki-*
+"""Checks of duneradgeo._cli, the click/rich helpers shared by the radgeo
 commands: VariadicOption, CliError and the info/warn/error lines.
 
 Run with pytest, or directly: python tests/test_cli.py.  Needs click and rich

@@ -1,7 +1,7 @@
 """Checks that the documentation matches the commands.
 
-* docs/bki-<command>.md contains the current ``--help`` text of the command
-  (click's layout, width 80; ``bki-bkg``: the group and each subcommand), so
+* docs/radgeo-<command>.md contains the current ``--help`` text of the command
+  (click's layout, width 80; ``radgeo backgrounds``: the group and each subcommand), so
   the option blocks cannot drift silently;
 * every relative markdown link ``[text](path#anchor)`` in README.md and
   docs/*.md points to an existing file and, with an anchor, to a heading of
@@ -13,7 +13,7 @@ needs click and rich (skipped without them).
 To refresh a block after changing a command, print its help and paste it into
 the fenced block of the docs file:
 
-    env XDG_CACHE_HOME=/home/user/.cache python tests/test_docs.py --print bki-extract
+    env XDG_CACHE_HOME=/home/user/.cache python tests/test_docs.py --print radgeo extract
 
 (``--print`` with no name prints all five; XDG_CACHE_HOME is fixed so that the
 ``--fcl-cache`` default does not depend on the machine.)
@@ -28,21 +28,23 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _runner import run_tests  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-COMMANDS = ("bki-extract", "bki-plot", "bki-measure", "bki-distrib", "bki-bkg")
+COMMANDS = ("radgeo extract", "radgeo plot", "radgeo measure", "radgeo profiles", "radgeo backgrounds")
 CACHE_HOME = "/home/user/.cache"       # fixes the --fcl-cache default shown
 
 _HELP_PROGRAM = r"""
-import importlib, sys
+import sys
 from click.testing import CliRunner
+from duneradgeo.cli import cli as radgeo
 cmd = sys.argv[1]
-mod = importlib.import_module("duneradgeo." + cmd.split("-", 1)[1])
+sub = cmd.split(" ", 1)[1]
+mod = radgeo.commands[sub]
 runner = CliRunner()
 def show(args):
-    r = runner.invoke(mod.cli, args, terminal_width=80, prog_name=cmd)
+    r = runner.invoke(mod, args, terminal_width=80, prog_name=cmd)
     sys.stdout.write(r.output + "\n====\n")
 show(["--help"])
-if cmd == "bki-bkg":                      # a group: every subcommand too
-    for name in mod.cli.commands:
+if cmd == "radgeo backgrounds":                      # a group: every subcommand too
+    for name in mod.commands:
         show(["IR_FILE", name, "--help"])
 """
 
@@ -52,7 +54,7 @@ def have_click_rich() -> bool:
 
 
 def help_texts(cmd: str) -> list:
-    """The ``--help`` outputs of `cmd` at width 80 (several for bki-bkg)."""
+    """The ``--help`` outputs of `cmd` at width 80 (several for radgeo backgrounds)."""
     env = dict(os.environ, XDG_CACHE_HOME=CACHE_HOME)
     env["PYTHONPATH"] = os.pathsep.join(
         [os.path.join(ROOT, "src")] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
@@ -66,7 +68,7 @@ def _norm(text: str) -> str:
 
 
 def doc_path(cmd: str) -> str:
-    return os.path.join(ROOT, "docs", cmd + ".md")
+    return os.path.join(ROOT, "docs", cmd.replace(" ", "-") + ".md")
 
 
 def test_help_in_docs():
@@ -83,10 +85,10 @@ def test_help_in_docs():
         for text in help_texts(cmd):
             text = _norm(text)
             assert text in doc, (
-                f"docs/{cmd}.md does not contain the current `{cmd} --help` text:\n"
+                f"docs/{cmd.replace(" ", "-")}.md does not contain the current `{cmd} --help` text:\n"
                 f"{text}\n\nRegenerate it with\n"
                 f"  env XDG_CACHE_HOME={CACHE_HOME} python tests/test_docs.py --print {cmd}\n"
-                f"and paste it in a fenced block of docs/{cmd}.md")
+                f"and paste it in a fenced block of docs/{cmd.replace(" ", "-")}.md")
 
 
 # ---- links --------------------------------------------------------------

@@ -1,11 +1,11 @@
 """
-bki-measure  —  geometric measurements on a JSON IR
+radgeo measure  —  geometric measurements on a JSON IR
 
 Usage:
-  bki-measure detector.json                    # every measurement, summaries
-  bki-measure detector.json drift-gaps -d      # one measurement, with per-row table
-  bki-measure detector.json --json out.json    # also write the results as JSON
-  bki-measure --list                           # available measurements
+  radgeo measure detector.json                    # every measurement, summaries
+  radgeo measure detector.json drift-gaps -d      # one measurement, with per-row table
+  radgeo measure detector.json --json out.json    # also write the results as JSON
+  radgeo measure --list                           # available measurements
 
 Lengths are in cm, in the IR frame (x = drift, z = beam).
 
@@ -74,10 +74,10 @@ _HELP = """Geometric measurements on a JSON IR.
 
 \b
 Usage:
-  bki-measure detector.json                    # every measurement, summaries
-  bki-measure detector.json drift-gaps -d      # one measurement, with per-row table
-  bki-measure detector.json --json out.json    # also write the results as JSON
-  bki-measure --list                           # available measurements
+  radgeo measure detector.json                    # every measurement, summaries
+  radgeo measure detector.json drift-gaps -d      # one measurement, with per-row table
+  radgeo measure detector.json --json out.json    # also write the results as JSON
+  radgeo measure --list                           # available measurements
 
 Lengths are in cm, in the IR frame (x = drift, z = beam).
 
@@ -96,7 +96,7 @@ each; adding a module there adds a measurement (see its docstring)."""
 @click.option("--json", "json_file", type=click.Path(dir_okay=False), default=None,
               metavar="FILE", help="Write the results (summary, values, rows) as JSON.")
 def cli(ir_file, names: tuple, list_: bool, detail: bool, json_file) -> None:
-    # IR_FILE is a JSON IR produced by bki-extract; MEASUREMENT: the
+    # IR_FILE is a JSON IR produced by radgeo extract; MEASUREMENT: the
     # measurements to run (default: all; see --list)
     if list_:
         render_list(console())
@@ -131,7 +131,7 @@ def cli(ir_file, names: tuple, list_: bool, detail: bool, json_file) -> None:
 
 
 def main(argv: list | None = None) -> None:
-    cli(args=argv, prog_name="bki-measure")
+    cli(args=argv, prog_name="radgeo measure")
 
 
 if __name__ == "__main__":

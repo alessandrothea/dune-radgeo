@@ -1,4 +1,4 @@
-"""Checks of the bki-extract command line (click + rich) on a tiny GDML of boxes
+"""Checks of the radgeo extract command line (click + rich) on a tiny GDML of boxes
 and small FHiCL files; no ROOT needed (the ROOT-missing error is forced).
 
 Run with pytest, or directly: python tests/test_extract_cli.py.  Needs click
@@ -174,7 +174,7 @@ def test_short_out_flag_and_help():
         for text in ("--out", "--anode-pattern", "--fieldshaper-pattern", "--struct",
                      "--with-passive", "--frame", "--containment", "--npx",
                      "--gdml-backend", "--fcl-cache", "--no-fcl-cache", "--verbose",
-                     "bki-extract geometry.gdml --out ir.json",
+                     "radgeo extract geometry.gdml --out ir.json",
                      "From a FCL file", "Output: a JSON IR"):
             assert text in res.output, text
 

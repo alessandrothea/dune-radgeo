@@ -5,7 +5,7 @@ Importing this module does not import matplotlib; :func:`import_mpl` does.
 from __future__ import annotations
 
 # ---------------------------------------------------------------------------
-# Per-kind colours (bki-plot; notebook_plot uses them too)
+# Per-kind colours (radgeo plot; notebook_plot uses them too)
 # ---------------------------------------------------------------------------
 
 ANODE_COL   = "royalblue"

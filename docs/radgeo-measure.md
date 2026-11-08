@@ -1,34 +1,34 @@
-# bki-measure
+# radgeo measure
 
 Geometric measurements on an IR (lengths in cm, in the IR frame -- the world
 unless the IR was extracted with `--frame`; the measured distances do not
-depend on it).  The IR comes from [bki-extract](bki-extract.md).
+depend on it).  The IR comes from [radgeo extract](radgeo-extract.md).
 
 ## Usage
 
 ```bash
-bki-measure geo.json drift-gaps        # (without a name: every measurement, one panel each)
+radgeo measure geo.json drift-gaps        # (without a name: every measurement, one panel each)
 # ╭─ drift-gaps: cathode ↔ anode distance along x (drift)  [cm] ──────────────────────────────╮
 # │ top     gap   651.080  (min 651.080, max 651.080, 28 anodes)   centre-to-centre   653.085 │
 # │         volTPCActive x-extent   650.000  (112 volumes)                                    │
 # │ bottom  no anodes                                                                         │
 # ╰───────────────────────────────────────────────────────────────────────────────────────────╯
 
-bki-measure geo.json drift-gaps -d --json gaps.json   # per anode–cathode pair
+radgeo measure geo.json drift-gaps -d --json gaps.json   # per anode–cathode pair
 ```
 
 ## Options
 
 ```
-Usage: bki-measure [OPTIONS] [IR_FILE] [MEASUREMENT]...
+Usage: radgeo measure [OPTIONS] [IR_FILE] [MEASUREMENT]...
 
   Geometric measurements on a JSON IR.
 
   Usage:
-    bki-measure detector.json                    # every measurement, summaries
-    bki-measure detector.json drift-gaps -d      # one measurement, with per-row table
-    bki-measure detector.json --json out.json    # also write the results as JSON
-    bki-measure --list                           # available measurements
+    radgeo measure detector.json                    # every measurement, summaries
+    radgeo measure detector.json drift-gaps -d      # one measurement, with per-row table
+    radgeo measure detector.json --json out.json    # also write the results as JSON
+    radgeo measure --list                           # available measurements
 
   Lengths are in cm, in the IR frame (x = drift, z = beam).
 
@@ -58,7 +58,7 @@ Measurements live in the `duneradgeo.measurements` package, one module each:
 
 ```
 src/duneradgeo/
-  measure.py                  bki-measure CLI (output, --detail, --json)
+  measure.py                  radgeo measure CLI (output, --detail, --json)
   measurements/
     __init__.py               auto-imports every module below
     _core.py                  Result, @measurement registry, box helpers, X / YZ axes
