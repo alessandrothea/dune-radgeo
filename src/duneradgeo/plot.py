@@ -502,14 +502,14 @@ _HELP = """Render a JSON IR as a matplotlib PDF.
 
 Produces the same 3D + 3x2D layout as the original plot_gdml_detectors.py:
 
-\\b
+\b
                  --orientation hd (default)   --orientation vd (x vertical)
   top-left       3D ortho view                3D ortho view
   top-right      Z-Y  beam face               Z-X  beam face
   bot-left       Z-X  top view                Z-Y  top view
   bot-right      X-Y  side view               Y-X  side view
 
-\\b
+\b
 Usage:
   bki-plot detector.json --out detector.pdf
   bki-plot detector.json --out detector.pdf --view 20 -60
