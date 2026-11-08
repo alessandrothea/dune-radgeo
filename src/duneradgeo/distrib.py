@@ -14,6 +14,7 @@ of points outside the volume_gen / material volumes.  Coordinates are world
 coordinates, as the generator samples them, also for IRs written with
 bki-extract --frame.
 
+
 Usage:
   bki-distrib detector.json                     # -> detector_distrib.pdf
   bki-distrib detector.json --out distrib.png --log   # distrib_0.png, …
@@ -24,18 +25,18 @@ Reads the distrib_* ranges, containment and Npx that bki-extract writes.
 """
 from __future__ import annotations
 
-import argparse
 import dataclasses
 import re
-import sys
 import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import click
 import numpy as np
 
-from . import _tf1
+from . import _cli, _tf1
 from ._fcl import DISTRIB_AXES, DISTRIB_COMMON, distrib_keys
+from ._cli import CONTEXT_SETTINGS, CliError, VariadicOption
 from ._root import ROOTUnavailable
 from .ir import IRCollection, VolumeEntry
 from ._select import select_volumes, validate_picks
@@ -233,23 +234,44 @@ def location_rows(g: DistribGroup) -> list[tuple]:
 
 
 def print_groups(groups: list[DistribGroup]) -> None:
+    """One block per distribution on stdout (rich): label, range, containment,
+    Npx, both effective ranges with their measured fractions, the surfaces, the
+    formula (folded, never cut) and a table of the producers."""
+    from rich import box
+    from rich.console import Group
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.text import Text
+
+    con = _cli.console()
     for i, g in enumerate(groups):
-        print(f"[{i}] {group_label(g)} · {g.label()}  range {_fmt_range(g.range_)}"
-              f"  containment {g.containment:g}  npx {g.npx}")
+        lines = [Text(f"range {_fmt_range(g.range_)}  containment {g.containment:g}"
+                      f"  npx {g.npx}")]
         try:
             frac_gen, frac_formula = fractions(g)
-            print(f"    eff_range (generated) {_fmt_range(g.eff)}  (measured {frac_gen:.4f})"
-                  + ("  [recomputed for --npx]" if g.eff_computed else ""))
-            print(f"    formula eff range     {_fmt_range(g.formula_eff)}"
-                  f"  (measured {frac_formula:.4f})")
+            lines.append(Text(f"eff_range (generated) {_fmt_range(g.eff)}"
+                              f"  (measured {frac_gen:.4f})"
+                              + ("  [recomputed for --npx]" if g.eff_computed else "")))
+            lines.append(Text(f"formula eff range     {_fmt_range(g.formula_eff)}"
+                              f"  (measured {frac_formula:.4f})"))
         except ValueError as exc:
-            print(f"    [cannot evaluate: {exc}]")
+            lines.append(Text(f"[cannot evaluate: {exc}]", style="dim"))
         if g.surfaces:
-            print(f"    surface: {', '.join(g.surfaces)}")
-        print(f"    formula: {g.formula}")
+            lines.append(Text(f"surface: {', '.join(g.surfaces)}"))
+        formula = Text("formula: ")
+        formula.append(g.formula, style="bold")
+        formula.overflow = "fold"
+        lines.append(formula)
+        prod = Table(box=box.SIMPLE_HEAD, pad_edge=False, header_style="bold")
+        prod.add_column("producer", overflow="fold")
+        prod.add_column("nuclide")
+        prod.add_column("placements", justify="right")
         for name, (nucl, n) in g.producers.items():
-            print(f"    {name}  ({nucl})" + (f"  x{n} placements" if n > 1 else ""))
-        print()
+            prod.add_row(Text(name), Text(str(nucl)), str(n))
+        lines.append(prod)
+        con.print(Panel(Group(*lines), title=Text(f"[{i}] {group_label(g)} · {g.label()}",
+                                                   style="bold"),
+                        title_align="left", box=box.ROUNDED, padding=(0, 1)))
 
 
 # ---- formula pretty-printing ---------------------------------------------
@@ -616,7 +638,7 @@ def plot_groups(groups: list[DistribGroup], out_path: str, title: str = "",
                 plt.close(fig)
             pdf.infodict()["Title"] = doc_title or "distrib_* position profiles"
         written = [str(out)]
-        print(f"[info] wrote {n} page(s) to {out}", file=sys.stderr)
+        _cli.info(f"wrote {n} page(s) to {out}")
     else:
         width = len(str(n - 1))
         written = []
@@ -626,8 +648,8 @@ def plot_groups(groups: list[DistribGroup], out_path: str, title: str = "",
             fig.savefig(path, dpi=110)
             plt.close(fig)
             written.append(str(path))
-        print(f"[info] wrote {n} file(s): {written[0]} … {written[-1]}"
-              if n > 1 else f"[info] wrote {written[0]}", file=sys.stderr)
+        _cli.info(f"wrote {n} file(s): {written[0]} … {written[-1]}"
+                  if n > 1 else f"wrote {written[0]}")
     return written
 
 
@@ -635,63 +657,28 @@ def plot_groups(groups: list[DistribGroup], out_path: str, title: str = "",
 # CLI
 # ---------------------------------------------------------------------------
 
-def main() -> None:
-    ap = argparse.ArgumentParser(
-        description=__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    ap.add_argument("ir_file", help="JSON IR produced by bki-extract")
-    ap.add_argument("--out", "-o", default=None,
-                    help="output file (default: <stem>_distrib.pdf): a PDF gets "
-                         "one page per distribution, other formats one file "
-                         "per distribution, <stem>_NN<suffix>")
-    ap.add_argument("--list", "-l", action="store_true",
-                    help="print the distributions, effective ranges and producers, "
-                         "then exit (needs ROOT, not matplotlib)")
-    ap.add_argument("--radio", nargs="+", default=None, metavar="PATTERN",
-                    help="regex filter on radio producer names")
-    ap.add_argument("--pick", nargs="+", default=None, metavar="SPEC",
-                    help="PRODUCER_RE#SEL as in bki-plot --surface (index list "
-                         "or @REGEX on surface, node, nuclide)")
-    ap.add_argument("--axis", nargs="+", choices=DISTRIB_AXES, default=None,
-                    help="only these axes (default: all present)")
-    ap.add_argument("--npx", type=int, default=None,
-                    help="TF1 Npx for the generated distribution (default: the "
-                         "distrib_eff_npx stored in the IR); another value recomputes the "
-                         "generated effective range")
-    ap.add_argument("--log", action="store_true", help="logarithmic y axis")
-    ap.add_argument("--no-zoom", action="store_true",
-                    help="no zoomed view on the effective range (by default it is "
-                         "added below the plot when the effective range is "
-                         "narrower than half the full range)")
-    ap.add_argument("--title", default=None,
-                    help="FHiCL shown in the LArSoft configuration section (default: the source FHiCL name)")
-    args = ap.parse_args()
-
-    ir_path = Path(args.ir_file)
+def _run(ir_file, out, list_, radio, pick, axis, npx, log, no_zoom, title) -> None:
+    ir_path = Path(ir_file)
     if not ir_path.is_file():
-        sys.exit(f"[error] '{args.ir_file}' not found")
+        raise CliError(f"'{ir_file}' not found")
     ir = IRCollection.load(ir_path)
 
+    pick = list(pick) or None
+    radio = list(radio) or None
     try:
-        validate_picks(pick=args.pick)
+        validate_picks(pick=pick)
         vols = select_volumes(ir, kinds=["radio"],
-                              kind_patterns={"radio": args.radio} if args.radio else None,
-                              picks=args.pick)
-    except ValueError as exc:
-        sys.exit(f"[error] {exc}")
-
-    try:
+                              kind_patterns={"radio": radio} if radio else None,
+                              picks=pick)
         groups = collect(vols)
     except ValueError as exc:
-        sys.exit(f"[error] {exc}")
-    if args.axis:
-        groups = [g for g in groups if g.axis in args.axis]
+        raise CliError(str(exc)) from None
+    if axis:
+        groups = [g for g in groups if g.axis in axis]
     if not groups:
-        sys.exit("[error] no radio volumes with a distrib_* formula "
-                 "(after the selectors)")
-    print(f"[info] {len(groups)} distribution(s) from "
-          f"{sum(len(g.producers) for g in groups)} producer entr(ies)", file=sys.stderr)
+        raise CliError("no radio volumes with a distrib_* formula (after the selectors)")
+    _cli.info(f"{len(groups)} distribution(s) from "
+              f"{sum(len(g.producers) for g in groups)} producer entr(ies)")
 
     # every group is evaluated by ROOT; drop those whose formula it cannot parse
     # or that integrates to 0 over its range (checked on the dense grid, so a
@@ -699,29 +686,66 @@ def main() -> None:
     kept = []
     for g in groups:
         try:
-            if args.npx:
-                g = with_npx(g, args.npx)
+            if npx:
+                g = with_npx(g, npx)
             g.dist.norm                       # raises ValueError
             kept.append(g)
         except ROOTUnavailable as exc:
-            sys.exit(f"[error] {exc}")
+            raise CliError(str(exc)) from None
         except ValueError as exc:
-            print(f"[warn] {g.label()} {g.formula!r}: {exc}; skipped", file=sys.stderr)
+            _cli.warn(f"{g.label()} {g.formula!r}: {exc}; skipped")
     groups = kept
     if not groups:
-        sys.exit("[error] no distribution could be evaluated")
+        raise CliError("no distribution could be evaluated")
 
-    if args.list:
+    if list_:
         print_groups(groups)
         return
 
-    out_path = args.out or str(ir_path.with_name(ir_path.stem + "_distrib.pdf"))
-    title = args.title or (Path(ir.source).name if ir.source else ir_path.stem)
+    out_path = out or str(ir_path.with_name(ir_path.stem + "_distrib.pdf"))
+    title = title or (Path(ir.source).name if ir.source else ir_path.stem)
     try:
-        plot_groups(groups, out_path, title=title, log=args.log, zoom=not args.no_zoom,
+        plot_groups(groups, out_path, title=title, log=log, zoom=not no_zoom,
                     doc_title=f"{ir_path.stem}: distrib_* profiles")
     except ImportError as exc:
-        sys.exit(f"[error] {exc}")
+        raise CliError(str(exc)) from None
+
+
+@click.command(context_settings=CONTEXT_SETTINGS, help=__doc__)
+@click.argument("ir_file", metavar="IR_FILE", type=click.Path(dir_okay=False))
+@click.option("--out", "-o", default=None, metavar="FILE",
+              help="Output file (default: <stem>_distrib.pdf): a PDF gets "
+                   "one page per distribution, other formats one file "
+                   "per distribution, <stem>_NN<suffix>.")
+@click.option("--list", "-l", "list_", is_flag=True,
+              help="Print the distributions, effective ranges and producers, "
+                   "then exit (needs ROOT, not matplotlib).")
+@click.option("--radio", cls=VariadicOption, metavar="PATTERN...",
+              help="Regex filter on radio producer names.")
+@click.option("--pick", cls=VariadicOption, metavar="SPEC...",
+              help="PRODUCER_RE#SEL as in bki-plot --surface (index list "
+                   "or @REGEX on surface, node, nuclide).")
+@click.option("--axis", cls=VariadicOption, type=click.Choice(list(DISTRIB_AXES)),
+              metavar="{x,y,z}...",
+              help="Only these axes (default: all present).")
+@click.option("--npx", type=int, default=None, metavar="N",
+              help="TF1 Npx for the generated distribution (default: the "
+                   "distrib_eff_npx stored in the IR); another value recomputes the "
+                   "generated effective range.")
+@click.option("--log", is_flag=True, help="Logarithmic y axis.")
+@click.option("--no-zoom", is_flag=True,
+              help="No zoomed view on the effective range (by default it is "
+                   "added below the plot when the effective range is "
+                   "narrower than half the full range).")
+@click.option("--title", default=None, metavar="TEXT",
+              help="FHiCL shown in the LArSoft configuration section (default: "
+                   "the source FHiCL name).")
+def cli(ir_file, out, list_, radio, pick, axis, npx, log, no_zoom, title) -> None:
+    _run(ir_file, out, list_, radio, pick, axis, npx, log, no_zoom, title)
+
+
+def main(argv: list | None = None) -> None:
+    cli(args=argv, prog_name="bki-distrib")
 
 
 if __name__ == "__main__":
