@@ -416,10 +416,10 @@ them is added below. Producers that share a formula and range share a page,
 which lists them. Each page is headed by the producers' common name and
 their nuclides (`UpperMesh1x8x14 · x profile, 7 producers (K42, Po218, …)`;
 a single producer gives its own name). The side panel has a Location
-section (shape: a thin layer at x = c or the surface
-label; the range holding the containment fraction; the sampling volume; the
-source FHiCL), a Sampling section and the producers; parameter names are
-in bold. `--list` prints the same name on each
+section (shape: a thin layer at x = c or the surface label; the range
+holding the containment fraction; the sampling volume), a Sampling section,
+the producers, and a LArSoft configuration section naming the source FHiCL;
+parameter names are in bold. `--list` prints the same name on each
 `[n]` line. Coordinates are world coordinates, which is what the generator
 uses, even for IRs written with `--frame`.
 
@@ -442,8 +442,8 @@ bki-distrib <ir.json> [options]
   --no-zoom           no zoomed view on the effective ranges (default: added
                       below the plot when they are narrower than half the
                       full range; window = their span ± 25%)
-  --title TEXT        source shown in the Location section (default: the source
-                      FHiCL name)
+  --title TEXT        FHiCL shown in the LArSoft configuration section
+                      (default: the source FHiCL name)
 ```
 
 ```bash

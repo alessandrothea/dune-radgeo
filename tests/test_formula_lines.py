@@ -204,11 +204,10 @@ def test_page_title():
 def test_location_rows():
     layer = _group(MESH_PRODUCERS, surfaces=["plane_x@-320.917"],
                    eff=(-323.082, -318.753))
-    assert location_rows(layer, "f.fcl") == [
+    assert location_rows(layer) == [
         ("shape", "thin layer at x = -320.9 cm"),
         ("99% within", "4.3 cm  ([-323.082, -318.753])"),
-        ("volume", "volume_rand:volCryostat"),
-        ("source", "f.fcl")]
+        ("volume", "volume_rand:volCryostat")]
     assert location_rows(_group(MESH_PRODUCERS)) == [
         ("shape", "bulk"), ("99% within", "[-425.120, 415.960] cm"),
         ("volume", "volume_rand:volCryostat")]

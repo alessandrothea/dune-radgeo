@@ -215,9 +215,9 @@ def page_title(g: DistribGroup, nmax: int | None = None) -> str:
     return what if label == f"{n} producers" else f"{label} · {what}"
 
 
-def location_rows(g: DistribGroup, source: str = "") -> list[tuple]:
+def location_rows(g: DistribGroup) -> list[tuple]:
     """(key, value) rows of the side panel's "Location" section: what the
-    distribution is applied to, how much of it matters, and where it comes from."""
+    distribution is applied to and how much of it matters."""
     lo, hi = g.eff
     pct = f"{100 * g.containment:g}%"
     plane = [s for s in g.surfaces if s.startswith(f"plane_{g.axis}@")]
@@ -229,8 +229,6 @@ def location_rows(g: DistribGroup, source: str = "") -> list[tuple]:
         shape = ", ".join(_surface_text(s) for s in g.surfaces) or "—"
         rows = [("shape", shape), (f"{pct} within", f"{_fmt_range(g.eff)} cm")]
     rows.append(("volume", ", ".join(g.sources) or "—"))
-    if source:
-        rows.append(("source", source))
     return rows
 
 
@@ -522,7 +520,8 @@ def _kv_table(fig, x0: float, y: float, rows: list[tuple], base: float = 9.0) ->
 def _draw_side_panel(fig, g: DistribGroup, frac: tuple | None,
                      source: str = "") -> None:
     """The right-hand panel: the location, the sampling table (with the
-    measured fractions `frac`, if given) and notes, and the producers."""
+    measured fractions `frac`, if given) and notes, the producers, and the
+    LArSoft configuration (`source`, the FHiCL the IR comes from)."""
     cont = f"{100 * g.containment:g}%"
     if frac is not None:
         cont += (f"  (measured: generated {100 * frac[0]:.2f}%,"
@@ -547,7 +546,7 @@ def _draw_side_panel(fig, g: DistribGroup, frac: tuple | None,
 
     x0, y = _PANEL, _TOP
     fig.text(x0, y, "Location", fontsize=_HEADING_SIZE, fontweight="bold", va="top")
-    y = _kv_table(fig, x0, y - _HEADING_H, location_rows(g, source)) - _SECTION_GAP
+    y = _kv_table(fig, x0, y - _HEADING_H, location_rows(g)) - _SECTION_GAP
     fig.text(x0, y, "Sampling", fontsize=_HEADING_SIZE, fontweight="bold", va="top")
     y = _kv_table(fig, x0, y - _HEADING_H, rows) - _NOTE_GAP
     fig.text(x0, y, "\n".join(notes), fontsize=_NOTE_SIZE, color=_GREY, va="top",
@@ -558,6 +557,11 @@ def _draw_side_panel(fig, g: DistribGroup, frac: tuple | None,
     y -= _HEADING_H
     fig.text(x0, y, "\n".join(prods), family=_MONO, fontsize=_mono_size(prods, fig, x0, 8.5),
              va="top", linespacing=_LS_MONO)
+    if source:
+        y -= _text_h(len(prods), 8.5, _LS_MONO, fig) + _SECTION_GAP
+        fig.text(x0, y, "LArSoft configuration", fontsize=_HEADING_SIZE,
+                 fontweight="bold", va="top")
+        _kv_table(fig, x0, y - _HEADING_H, [("FHiCL", source)])
 
 
 def _fit_text(fig, y: float, make, n: int, **kw) -> None:
@@ -589,7 +593,8 @@ def plot_groups(groups: list[DistribGroup], out_path: str, title: str = "",
     """
     One page per distribution: a multi-page PDF when `out_path` ends in .pdf,
     otherwise one file per distribution (<stem>_NN<suffix>).
-    `title` (e.g. the source FHiCL) is shown in each page's Location section;
+    `title` (e.g. the source FHiCL) is shown in each page's LArSoft
+    configuration section;
     `doc_title` is the PDF's Title metadata.  Returns the files written.
     """
     plt = import_mpl("--list works without it")
@@ -660,7 +665,7 @@ def main() -> None:
                          "added below the plot when the effective range is "
                          "narrower than half the full range)")
     ap.add_argument("--title", default=None,
-                    help="source shown in the Location section (default: the source FHiCL name)")
+                    help="FHiCL shown in the LArSoft configuration section (default: the source FHiCL name)")
     args = ap.parse_args()
 
     ir_path = Path(args.ir_file)
