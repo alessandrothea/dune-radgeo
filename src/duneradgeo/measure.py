@@ -14,12 +14,13 @@ each; adding a module there adds a measurement (see its docstring).
 """
 from __future__ import annotations
 
-import argparse
 import json
-import sys
 from dataclasses import asdict
 from pathlib import Path
 
+import click
+
+from ._cli import CONTEXT_SETTINGS, CliError, console, info
 from .ir import IRCollection
 from .measurements import MEASUREMENTS, Result, run
 
@@ -32,69 +33,105 @@ def _fmt(x) -> str:
     return f"{x:.3f}" if isinstance(x, float) else str(x)
 
 
-def print_result(res: Result, detail: bool = False) -> None:
-    print(f"== {res.name}: {res.title}  [cm]")
-    for line in res.summary:
-        print(f"  {line}")
+def render_list(con) -> None:
+    """The available measurements: name and one-line help."""
+    from rich.table import Table
+    t = Table(box=None, pad_edge=False, header_style="bold")
+    t.add_column("measurement", no_wrap=True)
+    t.add_column("help")
+    for m in MEASUREMENTS.values():
+        t.add_row(m.name, m.help)
+    con.print(t)
+
+
+def render_result(con, res: Result, detail: bool = False) -> None:
+    """A panel with the summary lines (spacing kept) and, with `detail`, the
+    per-row table below it."""
+    from rich.box import SIMPLE_HEAD
+    from rich.console import Group
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.text import Text
+
+    parts = [Text("\n".join(res.summary) if res.summary else "(no summary)",
+                  no_wrap=True, overflow="ignore")]
     if detail and res.rows:
-        cells  = [[_fmt(r.get(c, "")) for c in res.columns] for r in res.rows]
-        widths = [max(len(c), *(len(row[i]) for row in cells))
-                  for i, c in enumerate(res.columns)]
-        print()
-        print("  " + "  ".join(c.rjust(w) for c, w in zip(res.columns, widths)))
-        for row in cells:
-            print("  " + "  ".join(v.rjust(w) for v, w in zip(row, widths)))
-    print()
+        t = Table(box=SIMPLE_HEAD, header_style="bold", pad_edge=False)
+        for c in res.columns:
+            t.add_column(c, justify="right", no_wrap=True)
+        for r in res.rows:
+            t.add_row(*[Text(_fmt(r.get(c, ""))) for c in res.columns])
+        parts.append(t)
+    con.print(Panel(Group(*parts), title=Text(f"{res.name}: {res.title}  [cm]", style="bold"),
+                    title_align="left", expand=False))
 
 
 # ---------------------------------------------------------------------------
-# CLI
+# command line (click)
 # ---------------------------------------------------------------------------
 
-def main() -> None:
-    ap = argparse.ArgumentParser(
-        description=__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    ap.add_argument("ir_file", nargs="?", help="JSON IR produced by bki-extract")
-    ap.add_argument("names", nargs="*", metavar="MEASUREMENT",
-                    help="measurements to run (default: all; see --list)")
-    ap.add_argument("--list", action="store_true",
-                    help="list the available measurements and exit")
-    ap.add_argument("--detail", "-d", action="store_true",
-                    help="also print each measurement's per-row table")
-    ap.add_argument("--json", metavar="FILE", default=None,
-                    help="write the results (summary, values, rows) as JSON")
-    args = ap.parse_args()
+_HELP = """Geometric measurements on a JSON IR.
 
-    if args.list:
-        width = max(len(n) for n in MEASUREMENTS)
-        for m in MEASUREMENTS.values():
-            print(f"{m.name:<{width}}  {m.help}")
+\b
+Usage:
+  bki-measure detector.json                    # every measurement, summaries
+  bki-measure detector.json drift-gaps -d      # one measurement, with per-row table
+  bki-measure detector.json --json out.json    # also write the results as JSON
+  bki-measure --list                           # available measurements
+
+Lengths are in cm, in the IR frame (x = drift, z = beam).
+
+The measurements live in the duneradgeo.measurements package, one module
+each; adding a module there adds a measurement (see its docstring)."""
+
+
+@click.command(context_settings=CONTEXT_SETTINGS, help=_HELP)
+@click.argument("ir_file", required=False, metavar="[IR_FILE]",
+                type=click.Path(dir_okay=False))
+@click.argument("names", nargs=-1, metavar="[MEASUREMENT]...")
+@click.option("--list", "list_", is_flag=True,
+              help="List the available measurements and exit.")
+@click.option("--detail", "-d", is_flag=True,
+              help="Also print each measurement's per-row table.")
+@click.option("--json", "json_file", type=click.Path(dir_okay=False), default=None,
+              metavar="FILE", help="Write the results (summary, values, rows) as JSON.")
+def cli(ir_file, names: tuple, list_: bool, detail: bool, json_file) -> None:
+    # IR_FILE is a JSON IR produced by bki-extract; MEASUREMENT: the
+    # measurements to run (default: all; see --list)
+    if list_:
+        render_list(console())
         return
-    if not args.ir_file:
-        ap.error("ir_file is required (unless --list)")
+    if not ir_file:
+        raise click.UsageError("IR_FILE is required (unless --list)")
 
-    unknown = [n for n in args.names if n not in MEASUREMENTS]
+    unknown = [n for n in names if n not in MEASUREMENTS]
     if unknown:
-        sys.exit(f"[error] unknown measurement(s): {', '.join(unknown)}; "
-                 f"available: {', '.join(MEASUREMENTS)}")
+        raise CliError(f"unknown measurement(s): {', '.join(unknown)}; "
+                       f"available: {', '.join(MEASUREMENTS)}")
 
-    ir_path = Path(args.ir_file)
+    ir_path = Path(ir_file)
     if not ir_path.is_file():
-        sys.exit(f"[error] '{args.ir_file}' not found")
-    ir = IRCollection.load(ir_path)
-    print(f"[info] loaded {len(ir.volumes)} volumes from {ir_path.name}", file=sys.stderr)
+        raise CliError(f"'{ir_file}' not found")
+    try:
+        ir = IRCollection.load(ir_path)
+        info(f"loaded {len(ir.volumes)} volumes from {ir_path.name}")
+        results = run(ir, list(names) or None)
+    except ValueError as exc:
+        raise CliError(str(exc)) from None
 
-    results = run(ir, args.names or None)
+    con = console()
     for res in results:
-        print_result(res, detail=args.detail)
+        render_result(con, res, detail=detail)
 
-    if args.json:
-        Path(args.json).write_text(json.dumps(
+    if json_file:
+        Path(json_file).write_text(json.dumps(
             {"source": ir.source, "detector": ir.detector,
              "results": [asdict(r) for r in results]}, indent=2))
-        print(f"[info] results written to {args.json}", file=sys.stderr)
+        info(f"results written to {json_file}")
+
+
+def main(argv: list | None = None) -> None:
+    cli(args=argv, prog_name="bki-measure")
 
 
 if __name__ == "__main__":
