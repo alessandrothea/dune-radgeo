@@ -28,18 +28,17 @@ Needs `rich` for the tables (pip install rich), and nothing else but numpy.
 """
 from __future__ import annotations
 
-import argparse
 import difflib
 import json
 import os
 import re
 import shlex
-import sys
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
 
+import click
 import numpy as np
 
 from ._draw import aabb
@@ -442,8 +441,8 @@ def _rich():
         import rich.table
         import rich.tree  # noqa: F401
     except ImportError:
-        sys.exit("[error] bki-bkg needs the 'rich' package (pip install rich); "
-                 "--json works without it")
+        raise BkgError("bki-bkg needs the 'rich' package (pip install rich); "
+                       "--json works without it") from None
     return rich
 
 
@@ -585,60 +584,60 @@ def render_suggestions(console, d: dict, total: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# command line
+# command line (click)
 # ---------------------------------------------------------------------------
 
-def _build_parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("ir_file", help="JSON IR produced by bki-extract")
-    ap.add_argument("--json", action="store_true",
-                    help="print JSON instead of tables (any command)")
-    sub = ap.add_subparsers(dest="command", required=True, metavar="COMMAND")
+class BkgError(click.ClickException):
+    """A message for the user, printed as '[error] ...' with exit code 1."""
 
-    p = sub.add_parser("list", help="every background")
-    p.add_argument("--sort", choices=("name", "volumes"), default="name",
-                   help="order of the rows (default: name; volumes: most first)")
-
-    p = sub.add_parser("show", help="parameters and volumes of backgrounds")
-    p.add_argument("names", nargs="+", metavar="NAME_RE",
-                   help="regex (re.search) on the background names")
-    p.add_argument("--limit", type=int, default=25,
-                   help="volumes shown per background (default: 25; 0: all)")
-
-    p = sub.add_parser("select", help="backgrounds selected on a metadata field",
-                       description="Expressions: FIELD=REGEX  FIELD!=REGEX  FIELD<N "
-                                   "(<=, >, >=)  FIELD (exists).  All must hold.")
-    p.add_argument("exprs", nargs="+", metavar="EXPR")
-
-    p = sub.add_parser("region", help="backgrounds active in a region",
-                       description="The region is the intersection of the given "
-                                   "constraints; a background is active when one of "
-                                   "its volumes overlaps it.")
-    p.add_argument("--x", nargs=2, type=float, metavar=("LO", "HI"))
-    p.add_argument("--y", nargs=2, type=float, metavar=("LO", "HI"))
-    p.add_argument("--z", nargs=2, type=float, metavar=("LO", "HI"))
-    p.add_argument("--box", nargs=6, type=float,
-                   metavar=("X0", "X1", "Y0", "Y1", "Z0", "Z1"), help="a 3D box")
-    p.add_argument("--slice", action="append", metavar="AXIS=VALUE", default=[],
-                   help="the plane AXIS = VALUE (x=-328); repeatable for a line or point")
-    p.add_argument("--thickness", type=float, default=0.0, metavar="T",
-                   help="thickness of --slice planes (default: 0, a plane)")
-    p.add_argument("--volumes", action="store_true",
-                   help="also list the overlapping volumes")
-
-    sub.add_parser("suggest", help="selections and regions worth trying")
-    return ap
+    def show(self, file=None) -> None:
+        click.echo(f"[error] {self.message}", err=True)
 
 
-def _load(path: str) -> IRCollection:
-    p = Path(path)
-    if not p.is_file():
-        sys.exit(f"[error] '{path}' not found")
-    return IRCollection.load(p)
+class _Group(click.Group):
+    """A group that reports the ValueErrors of the commands (bad expression,
+    unknown field, empty region) as errors."""
+
+    def invoke(self, ctx):
+        try:
+            return super().invoke(ctx)
+        except ValueError as exc:
+            raise BkgError(str(exc)) from None
 
 
-def _parse_slices(items: list) -> dict:
+@dataclass
+class _Session:
+    """What the commands share: the IR file, loaded when a command needs it."""
+    path:    str
+    as_json: bool
+
+    def load(self) -> tuple:
+        """(ir, backgrounds); an error if the file or its backgrounds are missing."""
+        p = Path(self.path)
+        if not p.is_file():
+            raise BkgError(f"'{self.path}' not found")
+        ir = IRCollection.load(p)
+        bgs = backgrounds(ir)
+        if not bgs:
+            raise BkgError(f"no radiological background in '{self.path}'")
+        return ir, bgs
+
+    def console(self):
+        """A rich console; wide when the output is not a terminal."""
+        console = _rich().console.Console()
+        if not console.is_terminal and "COLUMNS" not in os.environ:
+            console = _rich().console.Console(width=_PIPE_WIDTH)
+        return console
+
+    def emit(self, data, render) -> None:
+        """JSON of `data`, or render(console) for the tables."""
+        if self.as_json:
+            click.echo(json.dumps(data, indent=2, default=str))
+        else:
+            render(self.console())
+
+
+def _parse_slices(items) -> dict:
     out = {}
     for s in items:
         m = re.fullmatch(r"\s*([xyzXYZ])\s*=\s*(\S+)", s)
@@ -656,82 +655,150 @@ def _vol_rows(b: Background, idx: list) -> list:
     return [d[i] for i in idx]
 
 
-def run(args, console=None) -> int:
-    """Execute a parsed command line; JSON goes to stdout, tables to `console`."""
-    ir = _load(args.ir_file)
-    bgs = backgrounds(ir)
-    if not bgs:
-        sys.exit(f"[error] no radiological background in '{args.ir_file}'")
-    if not args.json and console is None:
-        console = _rich().console.Console()
-        if not console.is_terminal and "COLUMNS" not in os.environ:
-            console = _rich().console.Console(width=_PIPE_WIDTH)
+def _json_option(fn):
+    """--json on a command: the same switch as the group's, so it can follow
+    the command name (bki-bkg IR_FILE select ... --json)."""
+    def callback(ctx, param, value):
+        if value:
+            ctx.obj.as_json = True
+    return click.option("--json", "json_flag", is_flag=True, expose_value=False,
+                        callback=callback, help="Print JSON instead of tables.")(fn)
 
-    def out(data):
-        print(json.dumps(data, indent=2, default=str))
 
+@click.group(cls=_Group, context_settings={"help_option_names": ["-h", "--help"]},
+             help="Inspect the radiological backgrounds of a JSON IR (bki-extract).\n\n"
+                  "A background is one radiological producer: its radio volumes "
+                  "(sampling boxes) and its FHiCL parameters.\n\n"
+                  "\b\nExamples:\n"
+                  "  bki-bkg ir.json list\n"
+                  "  bki-bkg ir.json show Po218 Cathode\n"
+                  "  bki-bkg ir.json select nuclide=Po218 'BqPercc<0.01'\n"
+                  "  bki-bkg ir.json region --slice x=-328\n"
+                  "  bki-bkg ir.json region --x -330 -300 --z 0 500 --volumes\n"
+                  "  bki-bkg ir.json select material=LAr --json")
+@click.argument("ir_file", metavar="IR_FILE", type=click.Path(dir_okay=False))
+@click.option("--json", "as_json", is_flag=True,
+              help="Print JSON instead of tables (also accepted after the command; "
+                   "needs no rich).")
+@click.pass_context
+def cli(ctx, ir_file: str, as_json: bool) -> None:
+    ctx.obj = _Session(ir_file, as_json)
+
+
+@cli.command("list")
+@click.option("--sort", type=click.Choice(["name", "volumes"]), default="name",
+              show_default=True, help="Order of the rows (volumes: most first).")
+@_json_option
+@click.pass_obj
+def list_cmd(sess: _Session, sort: str) -> None:
+    """Every background: module, nuclide, activity, material, sampling, volumes."""
+    _, bgs = sess.load()
+    rows = [summary(b) for b in bgs]
+    if sort == "volumes":
+        rows.sort(key=lambda r: -r["volumes"])
+    sess.emit(rows, lambda c: render_list(c, rows))
+
+
+@cli.command("show")
+@click.argument("names", nargs=-1, required=True, metavar="NAME_RE...")
+@click.option("--limit", type=int, default=25, show_default=True,
+              help="Volumes shown per background (0: all).")
+@_json_option
+@click.pass_obj
+def show_cmd(sess: _Session, names: tuple, limit: int) -> None:
+    """The FHiCL parameters, surfaces and volumes of the backgrounds whose name
+    matches a regex (re.search)."""
+    _, bgs = sess.load()
     try:
-        if args.command == "list":
-            rows = [summary(b) for b in bgs]
-            if args.sort == "volumes":
-                rows.sort(key=lambda r: -r["volumes"])
-            out(rows) if args.json else render_list(console, rows)
+        pats = [re.compile(n) for n in names]
+    except re.error as exc:
+        raise BkgError(f"bad regex: {exc}") from None
+    chosen = [b for b in bgs if any(p.search(b.name) for p in pats)]
+    if not chosen:
+        raise BkgError(f"no background matches {', '.join(names)}; "
+                       f"see 'bki-bkg {sess.path} list'")
+    data = [detail(b, limit) for b in chosen]
 
-        elif args.command == "show":
-            pats = [re.compile(n) for n in args.names]
-            chosen = [b for b in bgs if any(p.search(b.name) for p in pats)]
-            if not chosen:
-                sys.exit(f"[error] no background matches {', '.join(args.names)}; "
-                         f"see 'bki-bkg {args.ir_file} list'")
-            data = [detail(b, args.limit) for b in chosen]
-            if args.json:
-                out(data)
-            else:
-                for d in data:
-                    render_show(console, d)
+    def render(console):
+        for d in data:
+            render_show(console, d)
+    sess.emit(data, render)
 
-        elif args.command == "select":
-            exprs = [parse_expr(e) for e in args.exprs]
-            check_fields(exprs, bgs)
-            chosen = select(bgs, exprs)
-            rows = [summary(b) for b in chosen]
-            if args.json:
-                out({"expressions": [str(e) for e in exprs], "backgrounds": rows})
-            else:
-                shown = {b.name: "; ".join(
-                    f"{e.field}={','.join(b.texts(e.field)[:3])}" for e in exprs
-                    if e.op is not None and e.field in b.fields) for b in chosen}
-                render_list(console, rows, title="  AND  ".join(str(e) for e in exprs),
-                            extra=shown if any(shown.values()) else None)
 
-        elif args.command == "region":
-            ranges = {a: tuple(getattr(args, a)) for a in AXES if getattr(args, a)}
-            region = make_region(box=args.box, ranges=ranges,
-                                 slices=_parse_slices(args.slice),
-                                 thickness=args.thickness)
-            hits = in_region(bgs, region)
-            rows = region_rows(hits)
-            frame = (ir.frame or {}).get("volume", "world")
-            vols = {b.name: _vol_rows(b, idx) for b, idx in hits} if args.volumes else None
-            if args.json:
-                out({"region": {"lo": [None if np.isinf(x) else float(x) for x in region.lo],
-                                "hi": [None if np.isinf(x) else float(x) for x in region.hi]},
-                     "frame": frame, "backgrounds": rows,
-                     **({"volumes": vols} if vols else {})})
-            else:
-                render_region(console, region, rows, len(bgs), frame, vols)
+@cli.command("select", help="""The backgrounds for which every EXPR holds.
 
-        elif args.command == "suggest":
-            data = suggestions(bgs)
-            out(data) if args.json else render_suggestions(console, data, len(bgs))
-    except ValueError as exc:
-        sys.exit(f"[error] {exc}")
-    return 0
+\b
+EXPR is
+  FIELD=REGEX    re.search on any value of the field
+  FIELD!=REGEX   no value matches (also true if the field is absent)
+  FIELD<N        also <=, >, >=: any numeric value
+  FIELD          the background has the field
+
+A FIELD is a FHiCL parameter of the producer or a metadata key of its volumes
+(nuclide, surface, node, source, module_type, BqPercc, T0, ...), plus name and
+nvolumes; `suggest` lists them.""")
+@click.argument("exprs", nargs=-1, required=True, metavar="EXPR...")
+@_json_option
+@click.pass_obj
+def select_cmd(sess: _Session, exprs: tuple) -> None:
+    _, bgs = sess.load()
+    parsed = [parse_expr(e) for e in exprs]
+    check_fields(parsed, bgs)
+    chosen = select(bgs, parsed)
+    rows = [summary(b) for b in chosen]
+    shown = {b.name: "; ".join(
+        f"{e.field}={','.join(b.texts(e.field)[:3])}" for e in parsed
+        if e.op is not None and e.field in b.fields) for b in chosen}
+    sess.emit({"expressions": [str(e) for e in parsed], "backgrounds": rows},
+              lambda c: render_list(c, rows, title="  AND  ".join(str(e) for e in parsed),
+                                    extra=shown if any(shown.values()) else None))
+
+
+@cli.command("region", help="""The backgrounds active in a region.
+
+The region is the intersection of the constraints, in the frame stored in the
+IR; a background is active when the box of at least one of its volumes
+overlaps it (touching counts).""")
+@click.option("--x", "x", type=(float, float), default=None, metavar="LO HI")
+@click.option("--y", "y", type=(float, float), default=None, metavar="LO HI")
+@click.option("--z", "z", type=(float, float), default=None, metavar="LO HI")
+@click.option("--box", type=click.Tuple([float] * 6), default=None,
+              metavar="X0 X1 Y0 Y1 Z0 Z1", help="A 3D box.")
+@click.option("--slice", "slices", multiple=True, metavar="AXIS=VALUE",
+              help="The plane AXIS = VALUE, e.g. x=-328; repeat for a line or a point.")
+@click.option("--thickness", type=float, default=0.0, show_default=True, metavar="T",
+              help="Thickness of the --slice planes.")
+@click.option("--volumes", is_flag=True, help="Also list the overlapping volumes.")
+@_json_option
+@click.pass_obj
+def region_cmd(sess: _Session, x, y, z, box, slices, thickness, volumes) -> None:
+    ir, bgs = sess.load()
+    ranges = {a: v for a, v in (("x", x), ("y", y), ("z", z)) if v}
+    region = make_region(box=box, ranges=ranges, slices=_parse_slices(slices),
+                         thickness=thickness)
+    hits = in_region(bgs, region)
+    rows = region_rows(hits)
+    frame = (ir.frame or {}).get("volume", "world")
+    vols = {b.name: _vol_rows(b, idx) for b, idx in hits} if volumes else None
+    data = {"region": {"lo": [None if np.isinf(v) else float(v) for v in region.lo],
+                       "hi": [None if np.isinf(v) else float(v) for v in region.hi]},
+            "frame": frame, "backgrounds": rows, **({"volumes": vols} if vols else {})}
+    sess.emit(data, lambda c: render_region(c, region, rows, len(bgs), frame, vols))
+
+
+@cli.command("suggest")
+@_json_option
+@click.pass_obj
+def suggest_cmd(sess: _Session) -> None:
+    """Selections and regions that split the backgrounds, with the commands to
+    run them."""
+    _, bgs = sess.load()
+    data = suggestions(bgs)
+    sess.emit(data, lambda c: render_suggestions(c, data, len(bgs)))
 
 
 def main(argv: list | None = None) -> None:
-    args = _build_parser().parse_args(argv)
-    sys.exit(run(args))
+    cli(args=argv, prog_name="bki-bkg")
 
 
 if __name__ == "__main__":

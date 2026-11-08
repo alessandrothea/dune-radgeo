@@ -18,6 +18,7 @@ dependencies = [
     "jupyter",     # notebooks/nb_B.ipynb, scripts/run_notebook.py
     "nbconvert",
     "rich",        # bki-bkg tables
+    "click",       # bki-bkg command line
 ]
 
 # PyROOT for the host venv, from the `root` pip wheel: it evaluates the

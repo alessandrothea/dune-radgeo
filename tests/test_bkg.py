@@ -5,6 +5,7 @@ Run with pytest, or directly: python tests/test_bkg.py.  The IR is a small
 in-memory IRCollection; the logic needs neither ROOT nor rich, the rendering
 checks are skipped when rich is missing.
 """
+import importlib.util
 import io
 import json
 import os
@@ -14,6 +15,14 @@ import tempfile
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+if importlib.util.find_spec("click") is None:     # bki-bkg needs click
+    try:
+        import pytest
+        pytest.skip("click is not installed", allow_module_level=True)
+    except ImportError:
+        print("skipped: click is not installed")
+        sys.exit(0)
+
 from _runner import run_tests  # noqa: E402
 
 from duneradgeo import bkg  # noqa: E402
@@ -232,39 +241,33 @@ def test_anchored_value_regex():
 # --- command line ----------------------------------------------------------
 
 def run(*argv) -> tuple:
-    """(exit code or None, stdout) of the command line; stderr text on exit."""
+    """(exit code, stdout, stdout + stderr) of `bki-bkg IR_FILE *argv` on make_ir()."""
+    from click.testing import CliRunner
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "ir.json")
         make_ir().save(path)
-        out, old = io.StringIO(), sys.stdout
-        sys.stdout = out
-        try:
-            code = bkg.run(bkg._build_parser().parse_args([path, *argv]))
-        except SystemExit as exc:
-            code = exc.code
-        finally:
-            sys.stdout = old
-    return code, out.getvalue()
+        res = CliRunner().invoke(bkg.cli, [path, *argv], prog_name="bki-bkg")
+    return res.exit_code, res.stdout, res.output
 
 
 def test_json_commands():
-    code, out = run("--json", "list")
+    code, out, _ = run("list", "--json")
     rows = json.loads(out)
     assert code == 0 and [r["name"] for r in rows] == ["AnodeK40", "BulkAr39", "CathodeK40", "MeshPo218"]
-    code, out = run("--json", "select", "nuclide=K40", "BqPercc<0.1")
+    code, out, _ = run("select", "nuclide=K40", "BqPercc<0.1", "--json")
     d = json.loads(out)
     assert d["expressions"] == ["nuclide=K40", "BqPercc<0.1"]
     assert [r["name"] for r in d["backgrounds"]] == ["CathodeK40"]
-    code, out = run("--json", "show", "Mesh")
+    code, out, _ = run("show", "Mesh", "--json")
     d = json.loads(out)
     assert d[0]["name"] == "MeshPo218" and d[0]["params"]["rate"] == 1.2
     assert d[0]["volumes"][0]["lo"][0] == -323.0
-    code, out = run("--json", "region", "--slice", "x=325", "--volumes")
+    code, out, _ = run("region", "--slice", "x=325", "--volumes", "--json")
     d = json.loads(out)
     assert d["frame"] == "world" and [r["name"] for r in d["backgrounds"]] == ["AnodeK40", "BulkAr39"]
     assert len(d["volumes"]["AnodeK40"]) == 2
     assert d["region"]["lo"] == [325.0, None, None] and d["region"]["hi"] == [325.0, None, None]
-    code, out = run("--json", "suggest")
+    code, out, _ = run("suggest", "--json")
     assert "fields" in json.loads(out)
 
 
@@ -272,10 +275,38 @@ def test_command_errors_exit_cleanly():
     for argv, text in ((("select", "nucide=K40"), "unknown field"),
                        (("select", "name=("), "bad regex"),
                        (("show", "NoSuchBackground"), "no background matches"),
+                       (("show", "("), "bad regex"),
                        (("region", "--slice", "q=1"), "bad --slice"),
                        (("region", "--x", "5", "1"), "empty range")):
-        code, _ = run("--json", *argv)
-        assert isinstance(code, str) and text in code and code.startswith("[error]"), (argv, code)
+        code, _, output = run(*argv, "--json")
+        assert code == 1 and output.startswith("[error]") and text in output, (argv, code, output)
+        assert "Traceback" not in output
+    code, _, output = run("select", "--json")                    # EXPR is required
+    assert code == 2 and "Usage" in output and "Missing argument" in output
+    from click.testing import CliRunner
+    res = CliRunner().invoke(bkg.cli, ["/no/such/ir.json", "list"])
+    assert res.exit_code == 1 and "[error] '/no/such/ir.json' not found" in res.output
+
+
+def test_negative_numbers_and_help():
+    code, out, _ = run("region", "--x", "-330", "-300", "--z", "0", "500", "--json")
+    d = json.loads(out)
+    assert code == 0 and d["region"]["lo"] == [-330.0, None, 0.0]
+    assert "CathodeK40" in [r["name"] for r in d["backgrounds"]]
+    code, out, _ = run("region", "--box", "-400", "-300", "-10", "10", "250", "260", "--json")
+    assert code == 0 and "MeshPo218" in [r["name"] for r in json.loads(out)["backgrounds"]]
+    code, out, _ = run("region", "--slice", "x=-328", "--slice", "z=50", "--json")
+    assert code == 0 and [r["name"] for r in json.loads(out)["backgrounds"]] == [
+        "BulkAr39", "CathodeK40"]
+    # --json before the IR file (the group's option) is the same switch
+    from click.testing import CliRunner
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "ir.json")
+        make_ir().save(path)
+        res = CliRunner().invoke(bkg.cli, ["--json", path, "list"], prog_name="bki-bkg")
+    assert res.exit_code == 0 and len(json.loads(res.stdout)) == 4
+    code, out, _ = run("select", "--help")                       # works without loading the IR
+    assert code == 0 and "FIELD=REGEX" in out
 
 
 # --- rendering (rich) ------------------------------------------------------

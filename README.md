@@ -55,6 +55,7 @@ pip install --no-deps .          # add numpy if the environment lacks it
 | `matplotlib` | `bki-plot` and `bki-distrib` PDF/PNG output, `plot_ir` |
 | `plotly` | `make_figure` |
 | `rich` | `bki-bkg` tables (its `--json` output needs nothing else) |
+| `click` | `bki-bkg` command line |
 | `jupyter`, `nbconvert` | `nb_B.ipynb`, `scripts/run_notebook.py` |
 | `root` (group) | `distrib_*` formulas: `bki-extract` of producers with `distrib_*`, `bki-distrib`, `tests/test_tf1.py`.  `bki-extract --gdml-backend root` and `scripts/compare_backends.py` need a ROOT with TGeo/GDML (dunesw) |
 
@@ -91,7 +92,10 @@ geometry.gdml -o /abs/ir.json --gdml-backend root`).
 
 `bki-plot` and `bki-distrib` plots need matplotlib, which the area does not
 have: plot the JSON on the host with `uv run bki-plot` / `uv run bki-distrib`.
-`bki-distrib --list` works in the area (it uses the area's ROOT). After pulling a version that adds a
+`bki-distrib --list` works in the area (it uses the area's ROOT).
+`bki-bkg` needs `rich` and `click`; the area has `rich` but not `click`, so
+`pip install click` there first (`env -u PYTHONPATH`, see above), or run it on
+the host. After pulling a version that adds a
 command, re-run the install script: an editable install only creates the
 command scripts at install time (`python -m duneradgeo.<module>` works
 regardless).
@@ -490,11 +494,13 @@ IR files must carry the `distrib_*` keys above: re-run `bki-extract` for older o
 `bki-bkg` inspects the radiological backgrounds of an IR. A background is one
 radiological producer: the radio volumes of the IR that share its name (its
 sampling boxes) and its FHiCL parameters (`producers`). Tables are drawn with
-[rich](https://rich.readthedocs.io); `--json` prints the same data as JSON
-instead, for scripts (and needs no `rich`).
+[rich](https://rich.readthedocs.io); `--json`, given after the command (or
+before the IR file), prints the same data as JSON instead, for scripts (and
+needs no `rich`). The command line uses [click](https://click.palletsprojects.com),
+so `bki-bkg IR_FILE COMMAND --help` describes each command.
 
 ```
-bki-bkg <ir.json> [--json] COMMAND ...
+bki-bkg <ir.json> COMMAND ... [--json]
 
   list [--sort name|volumes]       every background: module, nuclide, activity
                                    (BqPercc, or rate), material, sampling
