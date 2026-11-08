@@ -9,16 +9,17 @@ authors = [
 requires-python = ">=3.9"
 
 # Full install: bki-extract, bki-plot, bki-measure, bki-distrib, bki-bkg and the notebook.
-# bki-extract alone needs numpy, plus PyROOT (the root group below, or a dunesw
-# area's ROOT) for producers with distrib_x/y/z: pip install --no-deps . numpy
+# Every command line is click + rich.  bki-extract needs only numpy, click and
+# rich, plus PyROOT (the root group below, or a dunesw area's ROOT) for
+# producers with distrib_x/y/z: pip install --no-deps . numpy click rich
 dependencies = [
     "numpy",       # bki-extract, bki-plot --list / -L
+    "click",       # the command lines (bki-*, scripts/)
+    "rich",        # messages and tables of the commands
     "matplotlib",  # bki-plot rendering, plot_ir
     "plotly",      # notebook_plot.make_figure
     "jupyter",     # notebooks/nb_B.ipynb, scripts/run_notebook.py
     "nbconvert",
-    "rich",        # bki-bkg tables
-    "click",       # bki-bkg command line
 ]
 
 # PyROOT for the host venv, from the `root` pip wheel: it evaluates the
