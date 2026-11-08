@@ -15,14 +15,16 @@ Usage:
 """
 from __future__ import annotations
 
-import argparse
-import sys
+import os
 from collections import defaultdict
 from typing import Any, NamedTuple
 from pathlib import Path
 
+import click
+
 import numpy as np
 
+from ._cli import CONTEXT_SETTINGS, CliError, VariadicOption, console, info, warn
 from ._draw import BOX_FACES, aabb, box_corners_world, project_polygon
 from ._select import highlight_groups, parse_pick_spec, select_volumes, validate_picks
 from ._style import (ANODE_COL, CATHODE_COL, CONTEXT_COL, DIM_DEFAULT, FACE_ALPHA,
@@ -355,8 +357,7 @@ def plot_ir(
         hl_labels, hl_groups, vols = highlight_groups(vols, highlight)
         for lbl, g in zip(hl_labels, hl_groups):
             if not g:
-                print(f"[warn] --highlight '{lbl}' matches no selected volume",
-                      file=sys.stderr)
+                warn(f"--highlight '{lbl}' matches no selected volume")
 
     fig = plt.figure(figsize=(16, 10))
     if title:
@@ -380,7 +381,7 @@ def plot_ir(
 
     fig.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
-    print(f"[info] plot written to {out_path}", file=sys.stderr)
+    info(f"plot written to {out_path}")
     plt.close(fig)
 
 
@@ -394,11 +395,27 @@ def _hl_mark(v, marks: dict | None) -> str:
     return f"*{k + 1}" if k is not None else ""
 
 
-def _print_list(volumes: list, marks: dict | None = None) -> None:
-    """Compact summary: kinds → unique names → placement count.
+# ---------------------------------------------------------------------------
+# Listings (rich tables)
+# ---------------------------------------------------------------------------
+
+def _wide(con):
+    """`con`, widened when piped so long paths stay on one line."""
+    if not con.is_terminal and "COLUMNS" not in os.environ:
+        con.width = max(con.width, WIDE_PIPE_WIDTH)
+    return con
+
+
+def _print_list(volumes: list, marks: dict | None = None, con=None) -> None:
+    """Compact summary, one table per kind: unique names → placement count.
 
     `marks` maps id(volume) → highlight spec index; highlighted placements
-    are counted per name and radio surfaces are flagged *k."""
+    are counted per name and radio surfaces are flagged *k (one row per
+    generation surface, for use with --surface)."""
+    from rich.box import SIMPLE_HEAD
+    from rich.table import Table
+
+    con = _wide(con or console())
     names_by_kind: dict[str, list[str]] = {}
     for v in volumes:
         names_by_kind.setdefault(v.kind, [])
@@ -406,208 +423,238 @@ def _print_list(volumes: list, marks: dict | None = None) -> None:
             names_by_kind[v.kind].append(v.name)
     for kind in sorted(names_by_kind):
         kvols = [v for v in volumes if v.kind == kind]
-        print(f"{kind}  ({_n_placements(kvols)} placements)")
+        radio = kind == "radio"
+        t = Table(title=f"{kind}  ({_n_placements(kvols)} placements)",
+                  title_justify="left", title_style="bold", box=SIMPLE_HEAD,
+                  header_style="bold", pad_edge=False)
+        t.add_column("name", no_wrap=True)
+        t.add_column("placements", justify="right", no_wrap=True)
+        t.add_column("boxes", justify="right", no_wrap=True)
+        t.add_column("highlighted", no_wrap=True)
+        if radio:
+            t.add_column("hl", no_wrap=True)
+            t.add_column("index", justify="right", no_wrap=True)
+            t.add_column("surface", no_wrap=True)
+            t.add_column("nuclide", no_wrap=True)
+            t.add_column("node / source", overflow="fold")
+        pad = [""] * 5 if radio else []
         for name in names_by_kind[kind]:
             vs = [v for v in kvols if v.name == name]
-            n  = _n_placements(vs)
             hl = [v for v in vs if _hl_mark(v, marks)]
             tag = ""
             if hl:
                 specs = sorted({_hl_mark(v, marks) for v in hl})
-                tag = f"  {_n_placements(hl)} highlighted {' '.join(specs)}"
-            print(f"  {name}  ({n}" + (f", {len(vs)} boxes)" if len(vs) != n else ")")
-                  + tag)
-            if kind == "radio":
-                # one line per generation surface, for use with --surface
+                tag = f"{_n_placements(hl)} highlighted {' '.join(specs)}"
+            t.add_row(name, str(_n_placements(vs)), str(len(vs)), tag, *pad,
+                      style="bold")
+            if radio:
                 for v in vs:
                     m = v.meta
-                    print(f"  {_hl_mark(v, marks):>2}#{m.get('index', '?'):<4}"
-                          f" {m.get('surface', '-'):<22}"
-                          f" {m.get('nuclide') or '-':<16}"
-                          f" {m.get('node') or m.get('source', '-')}")
+                    t.add_row(name, "", "", "", _hl_mark(v, marks),
+                              str(m.get("index", "?")), str(m.get("surface", "-")),
+                              str(m.get("nuclide") or "-"),
+                              str(m.get("node") or m.get("source", "-")),
+                              style="dim")
+        con.print(t)
 
 
-def _print_list_detail(volumes: list, marks: dict | None = None) -> None:
-    """One line per placement: kind, name, and x/y/z ranges in the IR frame
+def _print_list_detail(volumes: list, marks: dict | None = None, con=None) -> None:
+    """One row per placement: kind, name, and x/y/z ranges in the IR frame
     (column hl: *k when highlighted by spec k).  The path column is the
     physvol-name path (meta.pvpath) when the GDML names its physvols, else
-    the logical-volume path (meta.path)."""
-    # header
-    print(f"{'#':>5} {'hl':>3}  {'kind':<11}  {'name':<44}  {'surface':<22}"
-          f"  {'x_min':>10}  {'x_max':>10}"
-          f"  {'y_min':>10}  {'y_max':>10}"
-          f"  {'z_min':>10}  {'z_max':>10}  cm  path")
-    print("-" * 167)
+    the logical-volume path (meta.path); long paths are folded."""
+    from rich.box import SIMPLE_HEAD
+    from rich.table import Table
+
+    con = con or console()
+    con = _wide(con)
+    t = Table(title="placements; x/y/z ranges in cm, IR frame", title_justify="left",
+              box=SIMPLE_HEAD, header_style="bold", pad_edge=False)
+    t.add_column("#", justify="right", no_wrap=True)
+    t.add_column("hl", no_wrap=True)
+    t.add_column("kind", no_wrap=True)
+    t.add_column("name", no_wrap=True)
+    t.add_column("surface", no_wrap=True)
+    for ax in "xyz":
+        t.add_column(f"{ax}_min", justify="right", no_wrap=True)
+        t.add_column(f"{ax}_max", justify="right", no_wrap=True)
+    t.add_column("path", overflow="fold", ratio=1)
     for idx, v in enumerate(volumes):
         lo, hi = aabb(v.pos, v.ext, v.rot)
-        print(f"{idx:5d} {_hl_mark(v, marks):>3}  {v.kind:<11}  {_surface_tag(v):<44}"
-              f"  {v.meta.get('surface', v.meta.get('part', '')):<22}"
-              f"  {lo[0]:10.3f}  {hi[0]:10.3f}"
-              f"  {lo[1]:10.3f}  {hi[1]:10.3f}"
-              f"  {lo[2]:10.3f}  {hi[2]:10.3f}      {v.meta.get('pvpath') or v.meta.get('path', '')}")
+        t.add_row(str(idx), _hl_mark(v, marks), v.kind, _surface_tag(v),
+                  str(v.meta.get("surface", v.meta.get("part", ""))),
+                  f"{lo[0]:.3f}", f"{hi[0]:.3f}",
+                  f"{lo[1]:.3f}", f"{hi[1]:.3f}",
+                  f"{lo[2]:.3f}", f"{hi[2]:.3f}",
+                  str(v.meta.get("pvpath") or v.meta.get("path", "")))
+    con.print(t)
 
 
 # ---------------------------------------------------------------------------
-# CLI
+# command line (click)
 # ---------------------------------------------------------------------------
 
-def main() -> None:
-    ap = argparse.ArgumentParser(
-        description=__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    ap.add_argument("ir_file", help="JSON IR produced by bki-extract")
-    ap.add_argument("--list", "-l", action="store_true",
-                    help="print volume kinds and names grouped by kind (radio "
-                         "producers with one line per surface), then exit "
-                         "(respects selectors)")
-    ap.add_argument("--list-detail", "-L", action="store_true",
-                    help="print every placement with its x/y/z ranges in the IR "
-                         "frame and its path (physvol names when the GDML has "
-                         "them), then exit (respects selectors)")
-    ap.add_argument("--out", "-o", default=None,
-                    help="output plot file (default: <stem>.pdf)")
-    ap.add_argument("--view", nargs=2, type=float, default=(20.0, -60.0),
-                    metavar=("ELEV", "AZIM"),
-                    help="3D view elevation and azimuth in degrees (default: 20 -60)")
-    ap.add_argument("--title", default=None,
-                    help="plot title (default: derived from IR source)")
-    ap.add_argument("--proportional", action=argparse.BooleanOptionalAction,
-                    default=True,
-                    help="draw the 2D views to scale (1 cm == 1 cm on both "
-                         "axes); --no-proportional stretches each view to "
-                         "fill its panel (default: proportional)")
-    ap.add_argument("--orientation", choices=("hd", "vd", "auto"), default="hd",
-                    help="hd: drift axis x horizontal, y vertical; vd: x "
-                         "vertical in every view; auto: vd for VD IRs, hd "
-                         "otherwise (default: hd)")
-    # ---- volume selectors ----
-    grp = ap.add_argument_group("volume selectors")
-    grp.add_argument("--no-detector", action="store_true",
-                     help="exclude detector volumes (anode, opdet, cathode, "
-                          "fieldshaper, struct)")
-    grp.add_argument("--no-radio", action="store_true",
-                     help="exclude radiological background volumes (radio)")
-    grp.add_argument("--kind", nargs="+", default=None,
-                     metavar="KIND",
-                     help="show only these kinds: anode opdet cathode fieldshaper "
-                          "struct radio "
-                          "(applied after --no-detector / --no-radio)")
-    grp.add_argument("--name", nargs="+", default=None,
-                     metavar="PATTERN",
-                     help="show only volumes whose name matches at least one "
-                          "regex across all kinds (re.search)")
-    grp.add_argument("--anode", nargs="+", default=None, metavar="PATTERN",
-                     help="regex filter on anode volume names")
-    grp.add_argument("--opdet", nargs="+", default=None, metavar="PATTERN",
-                     help="regex filter on opdet volume names")
-    grp.add_argument("--cathode", nargs="+", default=None, metavar="PATTERN",
-                     help="regex filter on cathode volume names")
-    grp.add_argument("--fieldshaper", nargs="+", default=None, metavar="PATTERN",
-                     help="regex filter on field-shaper volume names")
-    grp.add_argument("--struct", nargs="+", default=None, metavar="PATTERN",
-                     help="regex filter on struct volume names")
-    grp.add_argument("--radio", nargs="+", default=None, metavar="PATTERN",
-                     help="regex filter on radio producer names")
-    grp.add_argument("--surface", nargs="+", default=None, metavar="SPEC",
-                     help="radio generation-surface selector PRODUCER_RE#SEL; "
-                          "SEL is an index list (0,2,5-7) or @REGEX matched "
-                          "against surface label, node and nuclide.  Producers "
-                          "not matched by any spec are left unfiltered; "
-                          "selected surfaces are coloured individually")
-    grp.add_argument("--pick", nargs="+", default=None, metavar="SPEC",
-                     help="placement selector NAME_RE#@REGEX for any kind: "
-                          "keep placements of matching volumes whose path "
-                          "(shown by -L, e.g. .../volTPC:37/volTPCPlaneV:0) "
-                          "or part matches REGEX; for radio entries it works "
-                          "as --surface.  Volumes not matched by any NAME_RE "
-                          "are left unfiltered")
-    hgrp = ap.add_argument_group("highlighting (applied after the selectors)")
-    hgrp.add_argument("--highlight", nargs="+", default=None, metavar="SPEC",
-                      help="[LABEL=]NAME_RE[#SEL]: draw the matching volumes on top, "
-                           "one colour and legend entry per spec, and the rest as "
-                           "grey context.  SEL as for --pick (optional; @REGEX "
-                           "also matches the physvol name pv and pvpath)")
-    hgrp.add_argument("--dim", type=float, default=DIM_DEFAULT, metavar="F",
-                      help=f"face opacity of the context volumes (default: {DIM_DEFAULT})")
-    hgrp.add_argument("--zoom-highlight", action="store_true",
-                      help="fit the axes to the highlighted volumes")
-    args = ap.parse_args()
+WIDE_PIPE_WIDTH = 320         # listing width when piped
+_DET_KINDS = {"anode", "opdet", "cathode", "fieldshaper", "struct"}
+_RADIO_KINDS = {"radio"}
 
-    ir_path = Path(args.ir_file)
+_HELP = """Render a JSON IR as a matplotlib PDF.
+
+Produces the same 3D + 3x2D layout as the original plot_gdml_detectors.py:
+
+\\b
+                 --orientation hd (default)   --orientation vd (x vertical)
+  top-left       3D ortho view                3D ortho view
+  top-right      Z-Y  beam face               Z-X  beam face
+  bot-left       Z-X  top view                Z-Y  top view
+  bot-right      X-Y  side view               Y-X  side view
+
+\\b
+Usage:
+  bki-plot detector.json --out detector.pdf
+  bki-plot detector.json --out detector.pdf --view 20 -60
+  bki-plot detector.json --highlight 'bottom planes=^volTPCPlane#@volTPC_PV_Bot'
+"""
+
+
+def _opt(*names, **kw):
+    return click.option(*names, cls=VariadicOption, default=None, **kw)
+
+
+@click.command(context_settings=CONTEXT_SETTINGS, help=_HELP)
+@click.argument("ir_file", metavar="IR_FILE")
+@click.option("--list", "-l", "do_list", is_flag=True,
+              help="Print volume kinds and names grouped by kind (radio "
+                   "producers with one row per surface), then exit "
+                   "(respects selectors).")
+@click.option("--list-detail", "-L", "do_list_detail", is_flag=True,
+              help="Print every placement with its x/y/z ranges in the IR "
+                   "frame and its path (physvol names when the GDML has "
+                   "them), then exit (respects selectors).")
+@click.option("--out", "-o", default=None,
+              help="Output plot file (default: <stem>.pdf).")
+@click.option("--view", type=(float, float), default=(20.0, -60.0),
+              metavar="ELEV AZIM", show_default=True,
+              help="3D view elevation and azimuth in degrees.")
+@click.option("--title", default=None,
+              help="Plot title (default: derived from IR source).")
+@click.option("--proportional/--no-proportional", default=True,
+              help="Draw the 2D views to scale (1 cm == 1 cm on both axes); "
+                   "--no-proportional stretches each view to fill its panel "
+                   "(default: proportional).")
+@click.option("--orientation", type=click.Choice(["hd", "vd", "auto"]), default="hd",
+              help="hd: drift axis x horizontal, y vertical; vd: x vertical in "
+                   "every view; auto: vd for VD IRs, hd otherwise (default: hd).")
+@click.option("--no-detector", is_flag=True,
+              help="Exclude detector volumes (anode, opdet, cathode, "
+                   "fieldshaper, struct).")
+@click.option("--no-radio", is_flag=True,
+              help="Exclude radiological background volumes (radio).")
+@_opt("--kind", metavar="KIND...",
+      help="Show only these kinds: anode opdet cathode fieldshaper struct radio "
+           "(applied after --no-detector / --no-radio).")
+@_opt("--name", metavar="PATTERN...",
+      help="Show only volumes whose name matches at least one regex across all "
+           "kinds (re.search).")
+@_opt("--anode", metavar="PATTERN...", help="Regex filter on anode volume names.")
+@_opt("--opdet", metavar="PATTERN...", help="Regex filter on opdet volume names.")
+@_opt("--cathode", metavar="PATTERN...", help="Regex filter on cathode volume names.")
+@_opt("--fieldshaper", metavar="PATTERN...",
+      help="Regex filter on field-shaper volume names.")
+@_opt("--struct", metavar="PATTERN...", help="Regex filter on struct volume names.")
+@_opt("--radio", metavar="PATTERN...", help="Regex filter on radio producer names.")
+@_opt("--surface", metavar="SPEC...",
+      help="Radio generation-surface selector PRODUCER_RE#SEL; SEL is an index "
+           "list (0,2,5-7) or @REGEX matched against surface label, node and "
+           "nuclide.  Producers not matched by any spec are left unfiltered; "
+           "selected surfaces are coloured individually.")
+@_opt("--pick", metavar="SPEC...",
+      help="Placement selector NAME_RE#@REGEX for any kind: keep placements of "
+           "matching volumes whose path (shown by -L, e.g. "
+           ".../volTPC:37/volTPCPlaneV:0) or part matches REGEX; for radio "
+           "entries it works as --surface.  Volumes not matched by any NAME_RE "
+           "are left unfiltered.")
+@_opt("--highlight", metavar="SPEC...",
+      help="[LABEL=]NAME_RE[#SEL]: draw the matching volumes on top, one colour "
+           "and legend entry per spec, and the rest as grey context.  SEL as "
+           "for --pick (optional; @REGEX also matches the physvol name pv and "
+           "pvpath).  Applied after the selectors.")
+@click.option("--dim", type=float, default=DIM_DEFAULT, metavar="F",
+              show_default=True,
+              help="Face opacity of the context volumes (with --highlight).")
+@click.option("--zoom-highlight", is_flag=True,
+              help="Fit the axes to the highlighted volumes.")
+def cli(ir_file, do_list, do_list_detail, out, view, title, proportional,
+        orientation, no_detector, no_radio, kind, name, anode, opdet, cathode,
+        fieldshaper, struct, radio, surface, pick, highlight, dim,
+        zoom_highlight) -> None:
+    ir_path = Path(ir_file)
     if not ir_path.is_file():
-        sys.exit(f"[error] '{args.ir_file}' not found")
-
+        raise CliError(f"'{ir_file}' not found")
     if ir_path.suffix.lower() != ".json":
-        sys.exit(f"[error] '{ir_path.name}' is not a JSON IR file — "
-                 f"run bki-extract first to produce one")
+        raise CliError(f"'{ir_path.name}' is not a JSON IR file — "
+                       f"run bki-extract first to produce one")
 
+    name, surface, pick, highlight = (list(x) or None
+                                      for x in (name, surface, pick, highlight))
     ir = IRCollection.load(ir_path)
-    print(f"[info] loaded {len(ir.volumes)} volumes from {ir_path.name}", file=sys.stderr)
+    info(f"loaded {len(ir.volumes)} volumes from {ir_path.name}")
 
-    # build effective kinds list from coarse + fine selectors
-    _DET_KINDS   = {"anode", "opdet", "cathode", "fieldshaper", "struct"}
-    _RADIO_KINDS = {"radio"}
-    active: set[str] = _DET_KINDS | _RADIO_KINDS
-    if args.no_detector:
+    # effective kinds list from the coarse + fine selectors
+    active: set = _DET_KINDS | _RADIO_KINDS
+    if no_detector:
         active -= _DET_KINDS
-    if args.no_radio:
+    if no_radio:
         active -= _RADIO_KINDS
-    # --kind refines further (intersection with active, or exact list if --no-* not used)
-    if args.kind:
-        requested = set(args.kind)
-        unknown   = requested - (_DET_KINDS | _RADIO_KINDS)
+    if kind:
+        requested = set(kind)
+        unknown = requested - (_DET_KINDS | _RADIO_KINDS)
         if unknown:
-            print(f"[warn] unknown kind(s): {', '.join(sorted(unknown))}; "
-                  f"valid kinds are: anode opdet cathode fieldshaper struct radio", file=sys.stderr)
+            warn(f"unknown kind(s): {', '.join(sorted(unknown))}; "
+                 f"valid kinds are: anode opdet cathode fieldshaper struct radio")
         active &= requested
     kinds = sorted(active) if active != (_DET_KINDS | _RADIO_KINDS) else None
 
-    out_path = args.out or str(ir_path.with_suffix(".pdf"))
-    title    = args.title or (
+    out_path = out or str(ir_path.with_suffix(".pdf"))
+    title = title or (
         f"{Path(ir.source).name}  —  {ir.detector.upper()} detector layout"
         if ir.source else ir_path.stem
     )
 
-    kind_patterns: dict[str, list[str]] = {}
-    for kind, flag in (("anode", args.anode), ("opdet", args.opdet),
-                       ("cathode", args.cathode),
-                       ("fieldshaper", args.fieldshaper), ("struct", args.struct),
-                       ("radio", args.radio)):
+    kind_patterns: dict = {}
+    for k, flag in (("anode", anode), ("opdet", opdet), ("cathode", cathode),
+                    ("fieldshaper", fieldshaper), ("struct", struct),
+                    ("radio", radio)):
         if flag:
-            kind_patterns[kind] = flag
+            kind_patterns[k] = list(flag)
 
-    # same filters for the listings and the plot
     try:
-        validate_picks(surface=args.surface, pick=args.pick, highlight=args.highlight)
-        vols = select_volumes(ir, kinds=kinds, name_patterns=args.name,
+        # same filters for the listings and the plot
+        validate_picks(surface=surface, pick=pick, highlight=highlight)
+        vols = select_volumes(ir, kinds=kinds, name_patterns=name,
                               kind_patterns=kind_patterns or None,
-                              surfaces=args.surface, picks=args.pick)
-    except ValueError as exc:
-        sys.exit(f"[error] {exc}")
-
-    if args.list or args.list_detail:
-        marks = None
-        if args.highlight:
-            try:
-                _, groups, _ = highlight_groups(vols, args.highlight)
-            except ValueError as exc:
-                sys.exit(f"[error] {exc}")
-            marks = {id(v): k for k, g in enumerate(groups) for v in g}
-        (_print_list_detail if args.list_detail else _print_list)(vols, marks)
-        sys.exit(0)
-
-    try:
-        plot_ir(ir, out_path, title=title, view=tuple(args.view),
-                kinds=kinds, name_patterns=args.name,
+                              surfaces=surface, picks=pick)
+        if do_list or do_list_detail:
+            marks = None
+            if highlight:
+                _, groups, _ = highlight_groups(vols, highlight)
+                marks = {id(v): k for k, g in enumerate(groups) for v in g}
+            (_print_list_detail if do_list_detail else _print_list)(vols, marks)
+            return
+        plot_ir(ir, out_path, title=title, view=tuple(view),
+                kinds=kinds, name_patterns=name,
                 kind_patterns=kind_patterns or None,
-                surfaces=args.surface, picks=args.pick,
-                proportional=args.proportional,
-                orientation=args.orientation,
-                highlight=args.highlight, dim=args.dim,
-                zoom_highlight=args.zoom_highlight)
-    except ValueError as exc:
-        sys.exit(f"[error] {exc}")
+                surfaces=surface, picks=pick,
+                proportional=proportional,
+                orientation=orientation,
+                highlight=highlight, dim=dim,
+                zoom_highlight=zoom_highlight)
+    except (ValueError, ImportError) as exc:
+        raise CliError(str(exc)) from None
+
+
+def main(argv: list | None = None) -> None:
+    cli.main(args=argv, prog_name="bki-plot")
 
 
 if __name__ == "__main__":
