@@ -1,6 +1,7 @@
 """
 bki-extract  —  extract detector & radiological volumes → JSON IR
 
+\b
 Usage:
   bki-extract geometry.gdml --out ir.json
   bki-extract job.fcl       --out ir.json
@@ -8,6 +9,7 @@ Usage:
       --anode-pattern 'volAnodePlate' --opdet-pattern '^volArapuca'
   bki-extract geometry.gdml --out ir.json --frame volEnclosureTPC
 
+\b
 From a FCL file (#includes expanded by fhicl-dump, else via $FHICL_FILE_PATH):
   * RadioGen / Decay0Gen producers → kind="radio" volumes, and each
     producer's full FHiCL table → the IR's top-level "producers";
@@ -35,15 +37,16 @@ Output: a JSON IR, read by bki-plot, bki-distrib and the nb_B notebook.
 """
 from __future__ import annotations
 
-import argparse
 import math
 import re
-import sys
 import time
 from pathlib import Path
 
+import click
 import numpy as np
 
+from . import _cli
+from ._cli import CONTEXT_SETTINGS, CliError, VariadicOption
 from ._draw import aabb
 from ._fcl import (DEFAULT_CONTAINMENT, DISTRIB_AXES, DISTRIB_COMMON,
                    FhiclParser, default_fcl_cache_dir, distrib_keys, expand_fcl,
@@ -57,7 +60,7 @@ from .ir import IRCollection, VolumeEntry
 
 
 class ExtractError(Exception):
-    """An extraction step cannot go on; bki-extract exits with its message."""
+    """An extraction step cannot go on; the command reports its message."""
 
 
 # radio row keys copied into the IR meta (when set)
@@ -82,21 +85,20 @@ def _gdml_volumes(gdml_path: Path,
     """Parse a GDML and return (entries, detector_key, geo).
 
     Raises ExtractError when the backend cannot read it."""
-    print(f"[info] parsing {gdml_path.name} ({backend} backend) …", file=sys.stderr)
+    _cli.info(f"parsing {gdml_path.name} ({backend} backend) …")
     t0  = time.time()
     try:
         geo = load_geometry(str(gdml_path), backend=backend, verbose=verbose)
     except RuntimeError as exc:
         raise ExtractError(str(exc)) from exc
-    print(f"[info] {len(geo.volume_names)} logical volumes  ({time.time()-t0:.1f}s)",
-          file=sys.stderr)
+    _cli.info(f"{len(geo.volume_names)} logical volumes  ({time.time()-t0:.1f}s)")
 
     profile_key = detect_profile(geo.volume_names)
     _, prof      = get_profile(profile_key)
     if profile_key:
-        print(f"[info] detected {prof['label']}  (profile {profile_key})", file=sys.stderr)
+        _cli.info(f"detected {prof['label']}  (profile {profile_key})")
     else:
-        print("[warn] unknown detector type; using generic patterns", file=sys.stderr)
+        _cli.warn("unknown detector type; using generic patterns")
 
     ap = anode_pats  or prof["anode_patterns"]
     op = opdet_pats  or prof["opdet_patterns"]
@@ -105,6 +107,7 @@ def _gdml_volumes(gdml_path: Path,
     sp = struct_pats or prof.get("struct_patterns", [])
 
     entries: list[VolumeEntry] = []
+    rows: list[tuple] = []            # (kind, name, centre, size, parts) per summary line
 
     def _collect(patterns, kind):
         hits = geo.find_positions(patterns, verbose=verbose, with_path=True)
@@ -113,8 +116,7 @@ def _gdml_volumes(gdml_path: Path,
         for name, pos, rot, path, pvname, pvpath in hits:
             parts = geo.volume_parts(name)
             if not parts:
-                print(f"[warn] no box/tube/torus solid for {kind} {name}, skipping",
-                      file=sys.stderr)
+                _cli.warn(f"no box/tube/torus solid for {kind} {name}, skipping")
                 continue
             copy = copies[name] = copies.get(name, -1) + 1
             boxes = []
@@ -134,11 +136,9 @@ def _gdml_volumes(gdml_path: Path,
             hi = np.max([b[1] for b in boxes], axis=0)
             c, d    = (lo + hi) / 2, hi - lo
             nparts  = f"  ({len(parts)} parts)" if len(parts) > 1 else ""
-            print(f"  {kind:<8} {name:<40s}"
-                  f"  x={c[0]:8.2f}  y={c[1]:8.2f}  z={c[2]:8.2f}"
-                  f"  dx={d[0]:8.2f}  dy={d[1]:8.2f}  dz={d[2]:8.2f}{nparts}")
+            rows.append((kind, name, c, d, nparts.strip()))
             ok += 1
-        print(f"[info] {ok}/{len(hits)} {kind} placements", file=sys.stderr)
+        _cli.info(f"{ok}/{len(hits)} {kind} placements")
 
     _collect(ap, "anode")
     _collect(op, "opdet")
@@ -153,9 +153,26 @@ def _gdml_volumes(gdml_path: Path,
         if pp:
             _collect(pp, "struct")
         else:
-            print("[warn] --with-passive: profile has no passive patterns", file=sys.stderr)
+            _cli.warn("--with-passive: profile has no passive patterns")
 
+    _print_summary(rows)
     return entries, profile_detector(profile_key), geo
+
+
+def _print_summary(rows: list[tuple]) -> None:
+    """The per-volume summary (bounding box centre and size, cm) as a table."""
+    if not rows:
+        return
+    from rich.table import Table
+    table = Table(box=None, header_style="bold", pad_edge=False)
+    table.add_column("kind")
+    table.add_column("name", overflow="fold")
+    for h in ("x", "y", "z", "dx", "dy", "dz"):
+        table.add_column(h, justify="right")
+    table.add_column("parts", style="dim")
+    for kind, name, c, d, nparts in rows:
+        table.add_row(kind, name, *(f"{v:.2f}" for v in (*c, *d)), nparts)
+    _cli.console().print(table)
 
 
 def _to_frame(entries: list[VolumeEntry], geo: GeometryBase, volume: str) -> dict:
@@ -171,8 +188,8 @@ def _to_frame(entries: list[VolumeEntry], geo: GeometryBase, volume: str) -> dic
     for e in entries:
         e.pos = R.T @ (e.pos - t)
         e.rot = R.T @ e.rot
-    print(f"[info] frame {volume} at x={t[0]:.2f} y={t[1]:.2f} z={t[2]:.2f}"
-          f"  ({path})", file=sys.stderr)
+    _cli.info(f"frame {volume} at x={t[0]:.2f} y={t[1]:.2f} z={t[2]:.2f}"
+              f"  ({path})")
     return {"volume": volume, "path": path, "pos": t.tolist(), "rot": R.tolist()}
 
 
@@ -187,7 +204,7 @@ def _parse_fcl(fcl_path: Path, cache_dir: str | None = None) -> tuple[dict, list
     of re-running the expensive expansion step.  When `cache_dir` is given the
     expanded text is persisted there and reused by later invocations.
     """
-    print(f"[info] parsing FCL {fcl_path.name} …", file=sys.stderr)
+    _cli.info(f"parsing FCL {fcl_path.name} …")
     parser = FhiclParser(expand_fcl(str(fcl_path), cache_dir=cache_dir))
     doc    = parser.parse()
     return doc, parser.order
@@ -220,14 +237,13 @@ def _fcl_radio_volumes(doc: dict,
         except ROOTUnavailable as exc:
             raise ExtractError(f"{name}: {exc}") from exc
         except Exception as exc:
-            print(f"[warn] {name}: {exc}", file=sys.stderr)
+            _cli.warn(f"{name}: {exc}")
             continue
 
         for r in rows:
             lo, hi = r.get("lo"), r.get("hi")
             if lo is None or hi is None or None in lo or None in hi:
-                print(f"[warn] {name}#{r['index']}: unresolved box (needs --gdml), skipping",
-                      file=sys.stderr)
+                _cli.warn(f"{name}#{r['index']}: unresolved box (needs --gdml), skipping")
                 continue
             lo_a, hi_a = np.array(lo, dtype=float), np.array(hi, dtype=float)
             pos = (lo_a + hi_a) / 2
@@ -237,7 +253,7 @@ def _fcl_radio_volumes(doc: dict,
             meta["index"] = r["index"]
             entries.append(VolumeEntry(kind="radio", name=name,
                                        pos=pos, ext=ext, rot=rot, meta=meta))
-    print(f"[info] {len(entries)} radio volume entries", file=sys.stderr)
+    _cli.info(f"{len(entries)} radio volume entries")
     return entries, producers
 
 
@@ -256,68 +272,84 @@ def _json_safe(v):
 # CLI
 # ---------------------------------------------------------------------------
 
-def main() -> None:
+def main(argv: list | None = None) -> None:
+    cli(args=argv, prog_name="bki-extract")
+
+
+def _patterns(values) -> list[str] | None:
+    """The values of a variadic option as a list, None when it was not given."""
+    return list(values) or None
+
+
+class _Args:
+    """The options as attributes (args.out, args.frame, ...)."""
+
+    def __init__(self, kw: dict):
+        self.__dict__.update(kw)
+
+
+@click.command(context_settings=CONTEXT_SETTINGS,
+               help=__doc__.split("\n", 2)[2].strip())
+@click.argument("input", metavar="INPUT")
+@click.option("--out", "-o", required=True, metavar="OUT",
+              help="output JSON file (IR)")
+@click.option("--anode-pattern", cls=VariadicOption, metavar="ANODE_PATTERN...",
+              help="regexes of the anode volume names (default: the profile's)")
+@click.option("--opdet-pattern", cls=VariadicOption, metavar="OPDET_PATTERN...",
+              help="regexes of the optical detector volume names (default: the profile's)")
+@click.option("--cathode-pattern", cls=VariadicOption, metavar="CATHODE_PATTERN...",
+              help="regexes of the cathode volume names (default: the profile's)")
+@click.option("--fieldshaper-pattern", cls=VariadicOption,
+              metavar="FIELDSHAPER_PATTERN...",
+              help="regexes of the field shaper volume names (default: the profile's)")
+@click.option("--struct-pattern", cls=VariadicOption, metavar="STRUCT_PATTERN...",
+              help="regexes of the structural volume names (default: the profile's)")
+@click.option("--struct", cls=VariadicOption, metavar="VOLNAME...",
+              help="exact structural volume names (anchored, overrides --struct-pattern)")
+@click.option("--with-passive", is_flag=True,
+              help="also extract the profile's passive material "
+                   "(steel shell, insulation, support, shielding, cavern) as struct")
+@click.option("--frame", default=None, metavar="VOLNAME",
+              help="express positions in the frame of this (singly placed) "
+                   "volume, e.g. volCryostat or volEnclosureTPC, instead of "
+                   "the world")
+@click.option("--prefix", default="",
+              help="only producers whose label starts with this")
+@click.option("--select", "select_re", default=None,
+              help="regex filter on producer labels")
+@click.option("--all-configured", is_flag=True,
+              help="include producers not on any trigger path")
+@click.option("--containment", type=float, default=DEFAULT_CONTAINMENT,
+              show_default=True,
+              help="distrib_x/y/z containment fraction for the effective range")
+@click.option("--npx", type=int, default=GENERATOR_NPX, show_default=True,
+              help="TF1 Npx of the generator: the effective range is that of "
+                   "the distribution TF1::GetRandom draws from an Npx-point "
+                   "table; larsimrad BaseRadioGen keeps ROOT's default")
+@click.option("--no-geometry", is_flag=True,
+              help="skip GDML parsing even when a FCL is given")
+@click.option("--gdml", default=None, metavar="GDML",
+              help="override GDML path (when input is FCL)")
+@click.option("--gdml-backend", type=click.Choice(list(BACKENDS)), default="python",
+              show_default=True,
+              help="GDML reader: the pure-Python parser, or ROOT's "
+                   "TGeoManager::Import (needs ROOT with TGeo/GDML, "
+                   "e.g. in the dunesw container)")
+@click.option("--fcl-cache", default=default_fcl_cache_dir(), metavar="DIR",
+              show_default=True,
+              help="directory where expanded FCL files are cached and "
+                   "reused across runs")
+@click.option("--no-fcl-cache", is_flag=True,
+              help="always re-run the FCL expansion, ignoring the cache")
+@click.option("--verbose", "-v", is_flag=True)
+def cli(**kw) -> None:
     try:
-        _main()
-    except ExtractError as exc:
-        sys.exit(f"[error] {exc}")
+        _run(_Args(kw))
+    except (ExtractError, ROOTUnavailable, ValueError) as exc:
+        raise CliError(str(exc)) from None
 
 
-def _main() -> None:
-    ap = argparse.ArgumentParser(
-        description=__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    ap.add_argument("input",
-                    help="GDML geometry file or expanded FHiCL job file")
-    ap.add_argument("--out", "-o", required=True,
-                    help="output JSON file (IR)")
-    # geometry patterns
-    ap.add_argument("--anode-pattern",  nargs="+", default=None)
-    ap.add_argument("--opdet-pattern",  nargs="+", default=None)
-    ap.add_argument("--cathode-pattern", nargs="+", default=None)
-    ap.add_argument("--fieldshaper-pattern", nargs="+", default=None)
-    ap.add_argument("--struct-pattern", nargs="+", default=None)
-    ap.add_argument("--struct", nargs="+", default=None, metavar="VOLNAME",
-                    help="exact structural volume names (anchored, overrides --struct-pattern)")
-    ap.add_argument("--with-passive", action="store_true",
-                    help="also extract the profile's passive material "
-                         "(steel shell, insulation, support, shielding, cavern) as struct")
-    ap.add_argument("--frame", default=None, metavar="VOLNAME",
-                    help="express positions in the frame of this (singly placed) "
-                         "volume, e.g. volCryostat or volEnclosureTPC, instead of "
-                         "the world")
-    # FCL options
-    ap.add_argument("--prefix",         default="",
-                    help="only producers whose label starts with this")
-    ap.add_argument("--select",         default=None,
-                    help="regex filter on producer labels")
-    ap.add_argument("--all-configured", action="store_true",
-                    help="include producers not on any trigger path")
-    ap.add_argument("--containment",    type=float, default=DEFAULT_CONTAINMENT,
-                    help="distrib_x/y/z containment fraction for the effective "
-                         "range (default %(default)s)")
-    ap.add_argument("--npx",            type=int, default=GENERATOR_NPX,
-                    help="TF1 Npx of the generator: the effective range is that of "
-                         "the distribution TF1::GetRandom draws from an Npx-point "
-                         "table; larsimrad BaseRadioGen keeps ROOT's default "
-                         "(default: %(default)s)")
-    ap.add_argument("--no-geometry",    action="store_true",
-                    help="skip GDML parsing even when a FCL is given")
-    ap.add_argument("--gdml",           default=None,
-                    help="override GDML path (when input is FCL)")
-    ap.add_argument("--gdml-backend",   choices=BACKENDS, default="python",
-                    help="GDML reader: the pure-Python parser, or ROOT's "
-                         "TGeoManager::Import (needs ROOT with TGeo/GDML, "
-                         "e.g. in the dunesw container) (default: %(default)s)")
-    ap.add_argument("--fcl-cache",      default=default_fcl_cache_dir(), metavar="DIR",
-                    help="directory where expanded FCL files are cached and "
-                         "reused across runs (default: %(default)s)")
-    ap.add_argument("--no-fcl-cache",   action="store_true",
-                    help="always re-run the FCL expansion, ignoring the cache")
-    ap.add_argument("--verbose", "-v",  action="store_true")
-    args = ap.parse_args()
-
+def _run(args) -> None:
     inp = Path(args.input)
     is_fcl = inp.suffix.lower() == ".fcl"
     if not inp.is_file():
@@ -353,9 +385,8 @@ def _main() -> None:
             if name:
                 gdml_path = resolve_search_path(name)
                 if gdml_path is None:
-                    print(f"[warn] '{name}' not found in $FW_SEARCH_PATH; "
-                          "radio volume_rand/gen boxes will be unresolved",
-                          file=sys.stderr)
+                    _cli.warn(f"'{name}' not found in $FW_SEARCH_PATH; "
+                              "radio volume_rand/gen boxes will be unresolved")
         else:
             gdml_path = inp  # input is already GDML
 
@@ -364,15 +395,15 @@ def _main() -> None:
     if gdml_path is not None:
         struct_pats = (
             [f"^{n}$" for n in args.struct] if args.struct
-            else args.struct_pattern
+            else _patterns(args.struct_pattern)
         )
         geo_entries, detector_key, geo = _gdml_volumes(
             gdml_path,
-            anode_pats=args.anode_pattern,
-            opdet_pats=args.opdet_pattern,
+            anode_pats=_patterns(args.anode_pattern),
+            opdet_pats=_patterns(args.opdet_pattern),
             struct_pats=struct_pats,
-            cathode_pats=args.cathode_pattern,
-            fieldshaper_pats=args.fieldshaper_pattern,
+            cathode_pats=_patterns(args.cathode_pattern),
+            fieldshaper_pats=_patterns(args.fieldshaper_pattern),
             passive=args.with_passive,
             verbose=args.verbose,
             backend=args.gdml_backend,
@@ -389,7 +420,7 @@ def _main() -> None:
             geo=geo,
             prefix=args.prefix,
             all_configured=args.all_configured,
-            select_re=args.select,
+            select_re=args.select_re,
             containment=args.containment,
             npx=args.npx,
         )
@@ -407,9 +438,9 @@ def _main() -> None:
     ir = IRCollection(source=source, detector=detector_key, volumes=entries,
                       frame=frame, producers=producers)
     ir.save(args.out)
-    print(f"[info] wrote {len(entries)} volume entries"
-          + (f" and {len(producers)} producer configs" if producers else "")
-          + f" to {args.out}", file=sys.stderr)
+    _cli.info(f"wrote {len(entries)} volume entries"
+              + (f" and {len(producers)} producer configs" if producers else "")
+              + f" to {args.out}")
 
 
 if __name__ == "__main__":
