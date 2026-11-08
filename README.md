@@ -9,17 +9,26 @@ Inspect DUNE background sources without a LArSoft environment:
 - **radiological position profiles** — the `distrib_x/y/z` formulas of those
   producers, drawn over the range the generator samples
 - **background inspection** — list the backgrounds of an IR, select them on a
-  metadata field or a region, see [bki-bkg](#bki-bkg)
+  metadata field or a region, see [bki-bkg](docs/bki-bkg.md)
 
 Python (NumPy + Matplotlib + Plotly), no LArSoft required.  PyROOT is needed
 for the `distrib_x/y/z` formulas, which are ROOT TF1 expressions and are
-evaluated by ROOT (see [bki-distrib](#bki-distrib)).  Optionally, the GDML can
+evaluated by ROOT (see [bki-distrib](docs/bki-distrib.md)).  Optionally, the GDML can
 also be read with ROOT instead of the built-in parser (see
-[GDML backends](#gdml-backends)).
+[GDML backends](docs/bki-extract.md#gdml-backends)).
 
 ---
-
 ## Installation
+
+Every command line needs **click** and **rich**, besides NumPy.  The minimal
+install, for a Python that provides nothing else, is
+
+```bash
+pip install --no-deps . numpy click rich
+```
+
+(`--no-deps` leaves matplotlib, plotly and the notebook tools out; add what
+you need from the table below.)  The full installs:
 
 ```bash
 cd dune-radgeo
@@ -41,25 +50,27 @@ prints an "alpha stage" warning on import; duneradgeo silences it.  Without
 PyROOT, the features that need it raise `ROOTUnavailable` (see
 [Python API](#python-api)).
 
-`bki-extract` itself needs only NumPy, plus PyROOT for producers with
-`distrib_x/y/z`.  For an extraction-only install, e.g. on top of a LArSoft
-Python that already provides NumPy and PyROOT, skip the dependencies:
+`bki-extract` of a geometry, or of producers without `distrib_*`, needs only
+NumPy, click and rich.  For an extraction-only install on top of a LArSoft
+Python that already provides NumPy and PyROOT, install without dependencies
+and add whichever of NumPy, click and rich is missing:
 
 ```bash
-pip install --no-deps .          # add numpy if the environment lacks it
+pip install --no-deps . numpy click rich
 ```
 
 | Package | Used by |
 |---------|---------|
-| `numpy` | everything (`bki-extract` of geometry and producers without `distrib_*`, `bki-plot --list` / `-L` need nothing else) |
+| `numpy` | everything |
+| `click` | the command line of every `bki-*` command |
+| `rich` | the messages and tables of every `bki-*` command (`bki-bkg --json` prints plain JSON) |
 | `matplotlib` | `bki-plot` and `bki-distrib` PDF/PNG output, `plot_ir` |
 | `plotly` | `make_figure` |
-| `rich` | `bki-bkg` tables (its `--json` output needs nothing else) |
-| `click` | `bki-bkg` command line |
 | `jupyter`, `nbconvert` | `nb_B.ipynb`, `scripts/run_notebook.py` |
 | `root` (group) | `distrib_*` formulas: `bki-extract` of producers with `distrib_*`, `bki-distrib`, `tests/test_tf1.py`.  `bki-extract --gdml-backend root` and `scripts/compare_backends.py` need a ROOT with TGeo/GDML (dunesw) |
 
-In a `--no-deps` install, rendering a plot without matplotlib stops with an
+`bki-plot --list` / `-L` and `bki-distrib --list` need no matplotlib.  In a
+`--no-deps` install, rendering a plot without matplotlib stops with an
 `ImportError` that says what to install.
 
 ### In a dunesw area
@@ -67,7 +78,9 @@ In a `--no-deps` install, rendering a plot without matplotlib stops with an
 To run `bki-extract` with the area's `$FHICL_FILE_PATH`, `$FW_SEARCH_PATH` and
 `fhicl-dump`, install it into the area's venv with `scripts/dunesw_installme.sh`.
 The script does an editable `--no-deps` install, and NumPy comes from the
-stack. With `dsw`:
+stack. The commands need click and rich: the dunesw area has `rich` but not
+`click`, so the script also installs whichever of the two the venv cannot
+import. With `dsw`:
 
 ```bash
 dsw -C <area> exec bash /path/to/dune-radgeo/scripts/dunesw_installme.sh
@@ -93,10 +106,10 @@ geometry.gdml -o /abs/ir.json --gdml-backend root`).
 `bki-plot` and `bki-distrib` plots need matplotlib, which the area does not
 have: plot the JSON on the host with `uv run bki-plot` / `uv run bki-distrib`.
 `bki-distrib --list` works in the area (it uses the area's ROOT).
-`bki-bkg` needs `rich` and `click`; the area has `rich` but not `click`, so
-`pip install click` there first (`env -u PYTHONPATH`, see above), or run it on
-the host. After pulling a version that adds a
-command, re-run the install script: an editable install only creates the
+If the script cannot install click (no network), do it by hand with
+`env -u PYTHONPATH python -m pip install click rich` in the area.
+
+After pulling a version that adds a command, re-run the install script: an editable install only creates the
 command scripts at install time (`python -m duneradgeo.<module>` works
 regardless).
 
@@ -112,32 +125,12 @@ bki-extract geometry.gdml --out detector.json
 
 # From a FHiCL job file (radio volumes + geometry via AuxDetGeometry.GDML)
 bki-extract job.fcl --out detector.json
-
-# Bare filenames are resolved via the LArSoft search paths:
-#   FHiCL → $FHICL_FILE_PATH
-#   GDML  → $FW_SEARCH_PATH
-bki-extract prodbackground_radio.fcl --out detector.json
 ```
 
-FHiCL files with `#include` directives are expanded automatically:
-`fhicl-dump` is used when available; otherwise includes are resolved inline
-via `$FHICL_FILE_PATH`. The expanded text is cached in
-`~/.cache/bki-extract/fcl/` (or `$XDG_CACHE_HOME/bki-extract/fcl/`) and
-reused on later runs. The cache is keyed on the top-level file's path, size
-and mtime plus `$FHICL_FILE_PATH`; edits to *included* files are not
-detected, so pass `--no-fcl-cache` after changing them. `--fcl-cache DIR`
-moves the cache elsewhere.
-
-Override patterns or supply the GDML explicitly:
-
-```bash
-bki-extract geometry.gdml --out ir.json \
-    --anode-pattern '^volAnodePlate$' \
-    --opdet-pattern '^volArapuca' \
-    --struct volTPCActive volGaseousArgon volTPC volCryostat
-
-bki-extract job.fcl --gdml /path/to/geometry.gdml --out ir.json
-```
+Bare filenames are resolved via the LArSoft search paths
+([File search paths](#file-search-paths)).  `#include` expansion and its
+cache, pattern overrides, `--frame`, `--with-passive` and the GDML backends are
+in [bki-extract](docs/bki-extract.md).
 
 ### 2. Render static PDF
 
@@ -146,21 +139,8 @@ bki-plot detector.json --out detector.pdf
 bki-plot detector.json --out detector.pdf --view 30 -45
 ```
 
-Layout: 3D ortho view (proportional axes) + Z–Y beam face + Z–X top view +
-X–Y side view.  The axis ranges enclose every drawn volume (plus a 3%
-margin), so use the selectors to zoom in.  The 2D views are drawn to scale
-by default and share the same axis ranges; `--no-proportional` stretches each one to fill its panel,
-which helps when the detector is much longer along one axis than another.
-
-`--orientation` sets which axis points up.  Each panel keeps its role; only
-the axes change:
-
-| Panel        | `hd` (default)        | `vd` (drift vertical) |
-|--------------|-----------------------|-----------------------|
-| top-left     | 3D, y up              | 3D, x up              |
-| top-right    | Z–Y  beam face        | Z–X  beam face        |
-| bottom-left  | Z–X  top view         | Z–Y  top view         |
-| bottom-right | X–Y  side view        | Y–X  side view        |
+A 3D view and three 2D views; selectors, highlighting and listings are in
+[bki-plot](docs/bki-plot.md).
 
 ### 3. Radiological position profiles
 
@@ -169,7 +149,7 @@ bki-distrib detector.json            # detector_distrib.pdf, one page per distri
 bki-distrib detector.json --list     # the same as text
 ```
 
-See [bki-distrib](#bki-distrib).
+See [bki-distrib](docs/bki-distrib.md).
 
 ### 4. Inspect the backgrounds
 
@@ -180,7 +160,7 @@ bki-bkg radbkg.json region --slice x=-328      # active on a plane
 bki-bkg radbkg.json suggest                    # other selections worth trying
 ```
 
-See [bki-bkg](#bki-bkg).
+See [bki-bkg](docs/bki-bkg.md).
 
 ### 5. Interactive notebook
 
@@ -199,647 +179,34 @@ can also save a static matplotlib PDF.
 
 ---
 
-## bki-extract options
-
-```
-bki-extract <input> --out <ir.json>
-
-  input               GDML geometry file or expanded FHiCL job file
-
-  --gdml PATH         override the GDML path (when input is FCL)
-  --gdml-backend {python,root}
-                      GDML reader: built-in parser (default) or ROOT's
-                      TGeoManager::Import (see GDML backends)
-  --no-geometry       skip GDML parsing (radio volume_rand/gen stay unresolved)
-
-  --anode-pattern P   regex(es) for anode volume names   (auto-detected)
-  --opdet-pattern P   regex(es) for opdet volume names   (auto-detected)
-  --cathode-pattern P regex(es) for cathode volume names (auto-detected, VD only)
-  --fieldshaper-pattern P
-                      regex(es) for field-shaper volume names (auto-detected, VD only)
-  --struct-pattern P  regex(es) for structural volumes   (auto-detected)
-  --struct VOLNAME    exact structural volume names (anchored, overrides --struct-pattern)
-  --with-passive      also extract the profile's passive material (steel shell,
-                      insulation, support structure, shielding, cavern) as struct
-  --frame VOLNAME     express positions in the frame of this singly placed volume
-                      (e.g. volCryostat, volEnclosureTPC) instead of the world;
-                      its world placement is stored in the IR as "frame"
-
-  --prefix PREFIX     only producers whose label starts with PREFIX
-  --select REGEX      regex filter on producer labels
-  --all-configured    include producers not on any trigger path
-  --containment F     distrib_x/y/z containment fraction for the effective
-                      ranges, stored as meta.distrib_eff_containment (default 0.99)
-  --npx N             TF1 Npx of the generator: the effective range is that of
-                      the distribution TF1::GetRandom draws from an N-point
-                      table, stored as meta.distrib_eff_npx (default 100, ROOT's
-                      default, which larsimrad BaseRadioGen keeps)
-  --fcl-cache DIR     cache directory for expanded FCL files
-                      (default: ~/.cache/bki-extract/fcl)
-  --no-fcl-cache      always re-run the FCL expansion
-  --verbose           extra debug output
-```
-
----
-
-## bki-plot options
-
-```
-bki-plot <ir.json> [--out <file.pdf>]
-
-  --list, -l          print volume kinds and names grouped by kind, with one
-                      line per radio generation surface, then exit
-  --list-detail, -L   print every placement with its x/y/z ranges (IR frame:
-                      the world unless extracted with --frame) and its path
-                      (pvpath when the GDML names its physvols), then exit
-                      (both listings respect all selectors below)
-
-  --view ELEV AZIM    3D view angles in degrees (default: 20 -60)
-  --title TEXT        plot title
-  --[no-]proportional 2D views to scale (default) or stretched to fill
-                      their panels
-  --orientation O     hd: drift axis x horizontal, y vertical (default)
-                      vd: x vertical in every view
-                      auto: vd for VD IRs, hd otherwise
-
-volume selectors (applied in order):
-  --no-detector       exclude anode / opdet / cathode / fieldshaper / struct volumes
-  --no-radio          exclude radio volumes
-  --kind K [K …]      keep only these kinds: anode opdet cathode fieldshaper
-                      struct radio
-  --anode P [P …]     regex filter on anode volume names
-  --opdet P [P …]     regex filter on opdet volume names
-  --cathode P [P …]   regex filter on cathode volume names
-  --fieldshaper P [P …]
-                      regex filter on field-shaper volume names
-  --struct P [P …]    regex filter on struct volume names
-  --radio P [P …]     regex filter on radio producer names
-  --name P [P …]      cross-kind name regex
-  --surface S [S …]   radio generation-surface selector
-  --pick S [S …]      placement selector for any kind, by GDML placement
-                      path (applied last)
-
-highlighting (applied after the selectors):
-  --highlight S [S …] [LABEL=]NAME_RE[#SEL]: draw matching volumes on top, one
-                      colour and legend entry per spec, the rest as grey context
-  --dim F             face opacity of the context volumes (default: 0.02)
-  --zoom-highlight    fit the axes to the highlighted volumes
-```
-
-See [Usage examples](#usage-examples) below.
-
----
-
-## bki-measure
-
-Geometric measurements on an IR (lengths in cm, in the IR frame — the world
-unless the IR was extracted with `--frame`; the measured distances do not
-depend on it).
-
-```
-bki-measure <ir.json> [MEASUREMENT …]
-
-  MEASUREMENT         measurements to run (default: all)
-  --list              list the available measurements and exit
-  --detail, -d        also print each measurement's per-row table
-  --json FILE         write the results (summary, values, rows) as JSON
-```
-
-```bash
-bki-measure geo.json
-# == drift-gaps: cathode ↔ anode distance along x (drift)  [cm]
-#   top     gap   650.080  (min 650.080, max 650.080, 80 anodes)   centre-to-centre   652.085
-#           volTPCActive x-extent   650.000  (320 volumes)
-#   bottom  gap   650.080  (min 650.080, max 650.080, 160 anodes)   centre-to-centre   652.085
-#           volTPCActive x-extent   650.000  (320 volumes)
-
-bki-measure geo.json drift-gaps -d --json gaps.json   # per anode–cathode pair
-```
-
-| Measurement  | What it measures | Needs |
-|--------------|------------------|-------|
-| `anode-cryostat-gap` | along x, each anode ↔ the `volCryostat` face behind it (top / bottom, split at the cathode plane); `gap_inner` / `gap_outer` from the anode's drift-side / cryostat-side face | `anode`, `struct volCryostat` |
-| `drift-gaps` | along x, each anode ↔ the cathode module it faces: `gap` between facing surfaces, `centre_dist`; per side, with outliers flagged | `anode`, `cathode` |
-| `opdet-fc-gap` | each wall optical detector ↔ the closest field-shaper part (box-to-box distance), per wall | `opdet`, `fieldshaper` |
-| `fc-cryostat-gap` | the four field-cage side walls ↔ the `volCryostat` walls: `gap_min` (closest piece), `gap_max` (most recessed piece) | `fieldshaper`, `struct volCryostat` |
-
-The full definitions are the docstrings of the measurement functions in
-`src/duneradgeo/measurements/`.
-
-### Adding a measurement
-
-Measurements live in the `duneradgeo.measurements` package, one module each:
-
-```
-src/duneradgeo/
-  measure.py                  bki-measure CLI (output, --detail, --json)
-  measurements/
-    __init__.py               auto-imports every module below
-    _core.py                  Result, @measurement registry, box helpers, X / YZ axes
-    anode_cryostat_gap.py     anode-cryostat-gap
-    drift_gaps.py             drift-gaps
-    fc_cryostat_gap.py        fc-cryostat-gap
-    opdet_fc_gap.py           opdet-fc-gap
-```
-
-To add one, create a module in `src/duneradgeo/measurements/` (name not
-starting with `_`) with a function that takes an `IRCollection`, returns a
-`Result` and is registered with `@measurement`.  It is imported
-automatically, runs by default (in module-name order) and can be selected by
-name; the CLI, `--detail` and `--json` need no changes.
-
-```python
-# src/duneradgeo/measurements/cathode_thickness.py
-"""cathode-thickness: x-extent of the cathode modules."""
-from __future__ import annotations
-
-from ..ir import IRCollection
-from ._core import X, Result, aabb, measurement, tags
-
-
-@measurement("cathode-thickness", "x-extent of the cathode modules")
-def cathode_thickness(ir: IRCollection) -> Result:
-    res = Result("cathode-thickness", "cathode module thickness along x",
-                 columns=["cathode", "dx"])
-    cathodes = ir.by_kind("cathode")
-    for tag, v in zip(tags(cathodes), cathodes):
-        lo, hi = aabb(v)                        # IR-frame box corners
-        res.rows.append(dict(cathode=tag, dx=float(hi[X] - lo[X])))
-    dx = [r["dx"] for r in res.rows]
-    res.values["dx"] = max(dx) if dx else None  # headline numbers (→ JSON)
-    res.summary.append(f"dx {res.values['dx']}")  # lines printed by default
-    return res
-```
-
-`Result` fields: `summary` (printed lines), `values` (headline numbers,
-`None` when not applicable), `columns` + `rows` (the `--detail` table).
-Helpers: `aabb(v)` the IR-frame (lo, hi) corners of a volume's box (via
-`duneradgeo._draw.aabb`), `tags(vols)` stable `name#k` labels,
-`overlap_area(...)` projected overlap of two boxes, `box_distances(...)`
-shortest distance from one box to many, `struct_box(ir, pattern)` bounding
-box of matching struct volumes (e.g. the cryostat).  From Python,
-`duneradgeo.measurements.run(ir, ["drift-gaps"])` returns the `Result` list.
-
----
-
-## bki-distrib
-
-Draws the position profiles of the radiological producers that set
-`distrib_x`, `distrib_y` or `distrib_z`. In larsimrad's `BaseRadioGen`, each
-of these is a 1D TF1 formula in the variable `x`. The generator samples it
-with `TF1::GetRandom` over the box range on that axis: `X0..X1` etc., the
-`volume_rand` bounding box, or each `volume_gen` node's box (see
-[radio boxes](#radio-boxes)). Axes without a formula are sampled uniformly.
-
-### The formula and the generated distribution (Npx)
-
-The formulas are ROOT TFormula expressions, so they are evaluated by ROOT
-(`duneradgeo._tf1`), never translated. Two distributions are described:
-
-- **the formula**: `TF1::Eval`, normalised over the range;
-- **as generated**: `GetRandom` draws from a cumulative table of `Npx`
-  points with a parabolic interpolation inside each bin. `BaseRadioGen` does
-  not call `SetNpx`, so ROOT's default of 100 applies: over the 850 cm of
-  `volCryostat` the bins are 8.5 cm wide, and a narrower feature is not
-  reproduced. The distribution is read from ROOT's own table
-  (`TF1::GetQuantiles`, at most `Npx / 2` probabilities per call so that ROOT
-  keeps the `Npx`-point table), without sampling.
-
-For the upper-mesh producers (a Gaussian of σ = 0.5 cm at x = −320 cm plus
-a constant), the generated distribution is a ramp from −323.08 to −318.75 cm
-instead of the Gaussian. A `lar` job with Decay0Gen confirms this: its 2.4M
-decay vertices match the `GetRandom` table to 0.01 cm (`tests/test_tf1.py`
-holds the reference quantiles). Smooth profiles, such as the bulk LAr ones,
-are not affected.
-
-`bki-extract` records, per axis with a formula, the full range
-(`distrib_<axis>_range`), the shortest interval holding `--containment` of the
-generated distribution (`distrib_<axis>_eff_range`, the effective range, which
-becomes the box on that axis) and the same for the formula
-(`distrib_<axis>_formula_eff_range`), plus `distrib_eff_containment` and `distrib_eff_npx`.
-
-Not modelled: the generator also redraws points that fall outside the
-volumes allowed by `volume_gen` / `material`. With `material: LAr` in the
-`volCryostat` box, nothing is generated in the gas above the liquid (x >
-325.09 cm in the 1x8x14 VD geometry), and the profile is renormalised over
-the liquid.
-
-### Pages and options
-
-`bki-distrib` draws, over the full range, the formula (black) and the
-generated distribution (blue), shades the generated effective range and
-marks the formula's (dotted), one distribution per page of the PDF. When the
-effective ranges are much narrower than the full range, a zoomed view on
-them is added below. Producers that share a formula and range share a page,
-which lists them. Each page is headed by the producers' common name and
-their nuclides (`UpperMesh1x8x14 · x profile, 7 producers (K42, Po218, …)`;
-a single producer gives its own name). The side panel has a Location
-section (shape: a thin layer at x = c or the surface label; the range
-holding the containment fraction; the sampling volume), a Sampling section,
-the producers, and a LArSoft configuration section naming the source FHiCL;
-parameter names are in bold. `--list` prints the same name on each
-`[n]` line. Coordinates are world coordinates, which is what the generator
-uses, even for IRs written with `--frame`.
-
-```
-bki-distrib <ir.json> [options]
-
-  --out, -o FILE      output (default: <stem>_distrib.pdf). A PDF has one page per
-                      distribution; other formats give one file per
-                      distribution, <stem>_NN<suffix>
-  --list, -l          print the distributions, both effective ranges with their
-                      measured containment, and the producers, then exit
-                      (needs ROOT, not matplotlib)
-  --radio PATTERN …   regex filter on radio producer names
-  --pick SPEC …       PRODUCER_RE#SEL, as for bki-plot --surface
-  --axis {x,y,z} …    only these axes
-  --npx N             Npx of the generated distribution (default: distrib_eff_npx from
-                      the IR); another value recomputes its effective range,
-                      e.g. --npx 10000 for a generator that sets SetNpx(10000)
-  --log               logarithmic y axis
-  --no-zoom           no zoomed view on the effective ranges (default: added
-                      below the plot when they are narrower than half the
-                      full range; window = their span ± 25%)
-  --title TEXT        FHiCL shown in the LArSoft configuration section
-                      (default: the source FHiCL name)
-```
-
-```bash
-bki-distrib radbkg.json --log
-bki-distrib radbkg.json --list --radio 'UpperMesh'
-# [0] UpperMesh1x8x14 · distrib_x  range [-425.120, 425.200]  containment 0.99  npx 100
-#     eff_range (generated) [-323.082, -318.753]  (measured 0.9900)
-#     formula eff range     [-321.704, -318.328]  (measured 0.9900)
-#     surface: plane_x@-320.917
-#     formula: (7.2257e+4*TMath::Exp(-(x+320.)*(x+320.)/(2.*0.5*0.5)))+1.
-#     K42From42ArGenInUpperMesh1x8x14  (K42)
-#     ...
-```
-
-Each page has a formula box with two captioned monospace blocks: the FHiCL
-parameter exactly as ROOT evaluates it (`distrib_x: "…"`, wrapped between
-top-level terms, nothing added or dropped), and the same formula compacted
-for reading only (`f(x) = …`, one term per line, `TMath::` dropped, `Abs(a)`
-as `|a|`, `Power(a,n)` as `a^n`, `*` as `·`). A side panel has the full and
-both effective ranges, the containment (stored, and measured for each
-distribution), `Npx`, the generator volume (`meta.source`) and the producers
-with their nuclides.
-
-IR files must carry the `distrib_*` keys above: re-run `bki-extract` for older ones.
-
----
-
-## bki-bkg
-
-`bki-bkg` inspects the radiological backgrounds of an IR. A background is one
-radiological producer: the radio volumes of the IR that share its name (its
-sampling boxes) and its FHiCL parameters (`producers`). Tables are drawn with
-[rich](https://rich.readthedocs.io); `--json`, given after the command (or
-before the IR file), prints the same data as JSON instead, for scripts (and
-needs no `rich`). The command line uses [click](https://click.palletsprojects.com),
-so `bki-bkg IR_FILE COMMAND --help` describes each command.
-
-```
-bki-bkg <ir.json> COMMAND ... [--json]
-
-  list [--sort name|volumes]       every background: module, nuclide, activity
-                                   (BqPercc, or rate), material, sampling
-                                   (meta.source), number of volumes, surfaces,
-                                   axes with a distrib_ formula
-  show NAME_RE ... [--limit N]     the producer's FHiCL parameters, its surfaces
-                                   and its volumes (first N, default 25; 0: all)
-  select EXPR ...                  the backgrounds for which every EXPR holds
-  region [--x LO HI] [--y ..] [--z ..] [--box X0 X1 Y0 Y1 Z0 Z1]
-         [--slice AXIS=VALUE ...] [--thickness T] [--volumes]
-                                   the backgrounds active in a region
-  suggest                          selections and regions worth trying
-```
-
-**`select`.** An `EXPR` is `FIELD=REGEX` (`re.search` on any value of the
-field), `FIELD!=REGEX` (no value matches; also true when the background lacks
-the field), `FIELD<N`, `<=`, `>`, `>=` (any numeric value), or a bare `FIELD`
-(the background has it). A `FIELD` is a FHiCL parameter of the producer
-(`isotope`, `material`, `volume_gen`, `decay_chain`, `BqPercc`, ...) or a
-metadata key of its volumes (`nuclide`, `surface`, `node`, `source`,
-`module_type`, `T0`, ...), plus `name` and `nvolumes`. A list or a table
-contributes its items. An unknown field is an error that names the closest
-known ones.
-
-**`region`.** The region is the intersection of the constraints, in the frame
-stored in the IR (world unless extracted with `--frame`). A background is
-active when the axis-aligned box of at least one of its volumes overlaps the
-region; touching counts. `--slice x=-328` is the plane `x = -328` (a
-`--thickness` gives it a width). The table gives, per background, how many of
-its volumes overlap and the extent of those; `--volumes` lists them.
-
-**`suggest`.** The values shared by several backgrounds for each field, with
-the `select` command and the number of backgrounds; thresholds for the numeric
-fields; the words of the names (`Mesh`, `Cathode`, ...); and the planes the
-volumes lie on, with the `region --slice` command, how many backgrounds lie on
-the plane and how many merely cross it (bulk backgrounds cross every plane in
-the cryostat).
-
-```bash
-bki-bkg radbkg.json select nuclide=K40 'BqPercc<0.1'      # both must hold
-bki-bkg radbkg.json select 'material=G10|vm2000' --json
-bki-bkg radbkg.json region --x -330 -300 --z 0 500 --volumes
-bki-bkg radbkg.json show Mesh --limit 0
-```
-
----
-
-## Usage examples
-
-### Extracting an IR
-
-```bash
-# geometry only, detector profile auto-detected from the GDML
-bki-extract geometry.gdml -o geo.json
-
-# full background job: radio producers on the trigger paths + geometry
-bki-extract prodbackground_radio.fcl -o radio.json
-
-# only the producers whose label starts with "GenIn" ...
-bki-extract prodbackground_radio.fcl -o cathode.json --prefix GenIn
-
-# ... or matching a regex, including producers not on any trigger path
-bki-extract prodbackground_radio.fcl -o rn.json --select 'Rn222|Po210' --all-configured
-
-# use a different geometry than the one named in AuxDetGeometry.GDML
-bki-extract prodbackground_radio.fcl -o radio.json --gdml /path/to/geometry.gdml
-
-# narrower effective ranges for producers with a distrib_x/y/z profile (95% containment)
-bki-extract prodbackground_radio.fcl -o radio.json --containment 0.95
-
-# an included .fcl was edited: bypass the expansion cache
-bki-extract prodbackground_radio.fcl -o radio.json --no-fcl-cache
-```
-
-### perl vs ggd VD GDML
-
-Both GDML flavours use the same detector volume names (the ggd one is
-detected as profile `vd-ggd`, the perl one as `vd-perl`; both are written to
-the IR as detector `vd`), and each
-geometry volume carries its placement `path` and, for ggd, its physvol name
-`pv`.  The ggd geometry nests the cryostat in `volSupportEnc` /
-`volEnclosureCryostat`, so world coordinates differ by a global offset:
-extract both in a common frame and compare them entry by entry.
-
-```bash
-bki-extract dunevd10kt_3view_30deg_v7_refactored_2x8x40.gdml -o ref.json --frame volEnclosureTPC
-bki-extract dunevd10kt_v7_full10kt_ggd.gdml                 -o ggd.json --frame volEnclosureTPC
-python scripts/compare_ir.py ref.json ggd.json -v     # exit status 1 if any group differs
-
-# ggd only: cryostat shell, insulation, I-beams, belts, shielding, cavern
-bki-extract dunevd10kt_v7_full10kt_ggd.gdml -o ggd_passive.json --with-passive
-```
-
-### GDML backends
-
-`--gdml-backend` picks how the GDML is read:
-
-| Backend | Reader | Needs |
-|---------|--------|-------|
-| `python` (default) | built-in XML parser (`GDMLGeometry`) | NumPy |
-| `root` | `TGeoManager::Import` (`RootGDMLGeometry`) | ROOT with TGeo/GDML (dunesw) |
-
-Both fill the same tables (volumes and placements, box/tube/torus
-decomposition, boolean operands) and share the search, so placement paths, physvol
-names, frames and box decomposition are identical; only the parsing
-differs.  ROOT evaluates GDML expressions and units itself and computes
-each solid's bounding box; the built-in parser builds the same boxes,
-booleans included, as ROOT does (see [radio boxes](#radio-boxes)).  Detector
-volumes whose solids are not boxes, tubes, tori or their booleans are
-skipped by both; for radio boxes the ROOT backend still uses ROOT's
-bounding box, while the built-in parser warns and skips them.
-Reading with ROOT takes a few seconds instead of a fraction of one.
-
-`scripts/compare_backends.py` loads one or more GDMLs with both backends
-and compares volumes, solid tables and every profile placement (paired by
-path), exiting with status 1 on a difference:
-
-```bash
-dsw -C <area> py /path/to/dune-radgeo/scripts/compare_backends.py geometry.gdml [more.gdml] [-v]
-
-# or through the IR
-dsw -C <area> exec bki-extract geometry.gdml -o /abs/py.json --gdml-backend python
-dsw -C <area> exec bki-extract geometry.gdml -o /abs/rt.json --gdml-backend root
-dsw -C <area> exec python /path/to/dune-radgeo/scripts/compare_ir.py /abs/py.json /abs/rt.json
-```
-
-The two backends agree exactly on the VD perl GDMLs (refactored 2x8x40,
-1x8x14 v5 and v7a), the VD ggd one (with and without wires) and the HD
-refactored 1x2x6 one.
-
-### Inspecting an IR
-
-```bash
-# kinds, names and placement counts; radio producers list each surface
-bki-plot radio.json --list
-
-# per-placement IR-frame ranges, restricted to structural volumes
-bki-plot radio.json -L --kind struct
-
-# where exactly are the cathode generation surfaces?
-bki-plot radio.json -L --kind radio --radio GenInCathode
-```
-
-Every selector below also works with `--list` / `-L`, so a selection can be
-checked before plotting it.
-
-### Plotting the detector
-
-```bash
-# everything, output next to the IR (radio.pdf)
-bki-plot radio.json
-
-# detector geometry only, custom title and view angle
-bki-plot radio.json --no-radio --title "FD2 VD geometry" --view 30 -45 -o geometry.pdf
-
-# anodes and active volume only
-bki-plot radio.json --kind anode struct --struct '^volTPCActive$' -o tpc.pdf
-
-# drift geometry: anode and cathode planes
-bki-plot geo.json --kind anode cathode --orientation auto -o drift.pdf
-
-# field cage only, slim rings (photon-detector window) only
-bki-plot geo.json --kind fieldshaper --fieldshaper 'Slim$' -o fc_slim.pdf
-
-# Vertical Drift: drift axis x drawn vertically ("auto" picks it for VD IRs)
-bki-plot radio.json --orientation vd -o radio_vd.pdf
-bki-plot radio.json --orientation auto
-
-# 2D views stretched to fill their panels instead of drawn to scale
-bki-plot radio.json --no-proportional -o radio_stretched.pdf
-
-# a PNG instead of a PDF (format follows the extension)
-bki-plot radio.json -o radio.png
-```
-
-### Plotting backgrounds
-
-```bash
-# radio volumes only
-bki-plot radio.json --no-detector -o radio_only.pdf
-
-# selected producers, drawn inside the detector outline
-bki-plot radio.json --radio 'GenInCathode|GenInAnode' -o cathode_anode.pdf
-
-# selected producers + only the cryostat for context
-bki-plot radio.json --kind radio struct --struct volCryostat \
-    --radio '^Ar39' -o ar39.pdf
-```
-
-### Plotting individual generation surfaces
-
-```bash
-# 1. see which surfaces each background defines
-bki-plot radio.json --list --kind radio
-#   radio  (5 placements)
-#     GenInCathode  (3)
-#       #0    plane_x@-300           Rn222            explicit
-#       #1    plane_x@0              Rn222            explicit
-#       #2    plane_x@300            Rn222            explicit
-#     Ar39GenInLAr  (2)
-#       #0    bulk                   Ar39             volFC_A
-#       #1    bulk                   Ar39             volFC_B
-
-# 2. by index: surfaces 0 and 2 of the cathode producer
-#    (all other backgrounds are still drawn in full)
-bki-plot radio.json --surface 'GenInCathode#0,2' -o cathode_02.pdf
-
-# index ranges
-bki-plot radio.json --surface 'GenInCathode#1-2'
-
-# by regex on surface label / geometry node / nuclide
-bki-plot radio.json --surface 'GenInCathode#@plane_x@-'   # surfaces at negative x
-bki-plot radio.json --surface 'Ar39GenInLAr#@volFC_B'     # one geometry node
-
-# several specs: each narrows only the producers it names
-bki-plot radio.json --surface 'GenInCathode#0' 'Ar39GenInLAr#@bulk'
-
-# only the chosen surfaces, nothing else
-bki-plot radio.json --no-detector --radio GenInCathode --surface 'GenInCathode#1'
-```
-
-### `--surface` syntax
-
-A background (RadioGen / Decay0Gen producer) can define several generation
-surfaces; each becomes one `radio` entry sharing the producer name and
-distinguished by `meta.index`.  `--surface` picks among them with specs of
-the form `PRODUCER_RE#SEL`:
-
-| `SEL`        | Keeps surfaces whose …                                         |
-|--------------|----------------------------------------------------------------|
-| `0,2,5-7`    | `meta.index` is in the list                                    |
-| `@REGEX`     | `meta.surface` (`bulk`, `plane_x@…`), `meta.node` or `meta.nuclide` matches |
-
-- `meta.surface` is derived by `bki-extract` from the box shape, not read
-  from the FHiCL: `plane_<axis>@<centre>` when the box's thinnest extent is
-  under 5 % of the next one, `bulk` otherwise. It is computed after the box
-  is shrunk to the effective range, so a peaked `distrib_x` source (e.g. a
-  mesh sampled in the `volCryostat` box) is labelled a plane.
-- Only producers matched by `PRODUCER_RE` (re.search) are narrowed; other
-  radio producers are left as they are.  Several specs for the same producer
-  are OR-ed.
-- Use `--list` to see each producer's surfaces (index, surface label,
-  nuclide, geometry node or source).
-- With `--surface`, every selected surface gets its own colour and legend
-  entry (`producer#index`); with more than 20 surfaces the colouring falls
-  back to one colour per producer.
-
-### Picking individual placements
-
-Many geometry volumes share a name (112 `volTPC`, 28 `volAnodePlate`, …).
-`bki-extract` records where each placement sits in the GDML tree as
-`meta.path`, one `volume:k` step per level below the world volume, where `k`
-counts the placements of that volume within its parent in GDML order:
-
-```
-volDetEnclosure:0/volCryostat:0/volEnclosureTPC:0/volTPC:5/volTPCActive:0
-```
-
-The path depends only on the GDML, not on the extraction patterns, so it
-identifies the same placement every time the GDML is extracted, and an edit
-to one branch of the tree leaves the paths elsewhere unchanged.  `-L` prints
-it in the last column — or, for GDMLs that name their physvols (ggd), the
-physvol-name path `meta.pvpath` instead, e.g.
-`…/placeTPCEnclosure/volTPC_PV_Bot0/volTPCPlaneU_PV`.  Selectors match both.
-
-```bash
-# 1. find the placements
-bki-plot geo.json -L --kind anode
-#   0  anode  volAnodePlate  ...  volDetEnclosure:0/volCryostat:0/volEnclosureTPC:0/volAnodePlate:0
-#   1  anode  volAnodePlate  ...  volDetEnclosure:0/volCryostat:0/volEnclosureTPC:0/volAnodePlate:1
-
-# 2. anode plates 0 and 2 only (everything else still drawn)
-bki-plot geo.json --pick 'volAnodePlate#@volAnodePlate:[02]$'
-
-# TPC 5 and its active volume
-bki-plot geo.json --kind struct --pick '^volTPC$#@volTPC:5$' '^volTPCActive$#@/volTPC:5/'
-
-# arapucas mounted directly in the cryostat (not in the TPC enclosure)
-bki-plot geo.json --kind opdet --pick 'volArapuca#@volCryostat:0/volArapuca:'
-```
-
-`--pick` takes `NAME_RE#@REGEX` specs, like `--surface`, but for every kind:
-
-- `REGEX` is matched (re.search) against `meta.path`, `meta.part` (the
-  primitive solid of a multi-part volume) and, for GDMLs that name their
-  physvols (ggd), `meta.pv` and `meta.pvpath`; on radio entries `--pick`
-  works exactly like `--surface`, including index lists.
-- Index lists (`#0,2`) are for radio entries only; on a geometry volume they
-  are an error.
-- `NAME_RE` is a `re.search` too: `volTPC` also matches `volTPCActive`, and
-  that volume would then be narrowed by the same `REGEX`.  Anchor it
-  (`^volTPC$`) to target one volume.
-- Volumes not matched by any `NAME_RE` are untouched; several specs for the
-  same volume are OR-ed.
-- IR files written before `meta.path` existed cannot be picked from; re-run
-  `bki-extract`.
-
-### Highlighting volumes
-
-`--pick` and the other selectors decide what is drawn (and the axis
-ranges).  `--highlight` then picks out a subset of the drawn volumes: they
-are drawn on top in a strong colour, one colour and legend entry per spec,
-and everything else is drawn as faint grey context.
-
-```bash
-# ggd geometry with the wire planes extracted: where do the bottom-CRM
-# readout planes sit?  (they should be at the bottom anode, x ≈ -652)
-bki-extract dunevd10kt_v7_full10kt_ggd.gdml -o planes.json --frame volEnclosureTPC \
-    --struct-pattern '^volTPCPlane[UVZ]$' '^volTPC$'
-bki-plot planes.json --orientation vd \
-    --highlight 'bottom planes=^volTPCPlane#@volTPC_PV_Bot' \
-                'top planes=^volTPCPlane#@volTPC_PV_Top' 'cathode=^volCathodeGrid$'
-
-# same check on a perl GDML (unnamed physvols): bottom CRMs are the odd copies
-bki-plot planes_ref.json --orientation vd \
-    --highlight 'bottom planes=^volTPCPlane#@volTPC:\d*[13579]/'
-
-# wall-mounted photon detectors only, axes fitted to them
-bki-plot geo.json --kind opdet cathode --zoom-highlight \
-    --highlight 'wall=volArapuca$#@volCryostat:0/volArapuca:'
-
-# check a spec before plotting: highlighted placements are marked *k
-bki-plot planes.json -l --highlight 'bottom planes=^volTPCPlane#@volTPC_PV_Bot'
-bki-plot planes.json -L --kind struct --highlight '^volTPCPlaneU$#@_PV_Bot'
-```
-
-`--highlight` takes `[LABEL=]NAME_RE[#SEL]` specs:
-
-- `NAME_RE` and `#SEL` work as for `--pick`, but `#SEL` is optional: a bare
-  `NAME_RE` highlights every placement of the matching volumes.  Unlike
-  `--pick`, volumes not named by any spec are not highlighted.
-- `LABEL=` (letters, digits, spaces, `-`, `_`, …; no regex characters) names
-  the group in the legend; without it the spec itself is used.  Spaces
-  around the `=` are ignored (`grp = ^K42` is `grp=^K42`).
-- A volume matched by several specs belongs to the first one.
-- Highlighted boxes thinner than 0.4 % of an axis span in a 2D view (wire
-  planes, X-ARAPUCAs seen edge-on) are drawn as lines so they stay visible.
-- With `--highlight`, the per-kind colours and the per-surface colouring of
-  `--surface` are replaced by the spec colours and grey.
+## Commands
+
+| Command | What it does | Documentation |
+|---------|--------------|---------------|
+| `bki-extract` | GDML / FHiCL → JSON IR | [docs/bki-extract.md](docs/bki-extract.md) |
+| `bki-plot` | IR → static PDF/PNG, listings, selectors, highlighting | [docs/bki-plot.md](docs/bki-plot.md) |
+| `bki-measure` | geometric measurements on an IR | [docs/bki-measure.md](docs/bki-measure.md) |
+| `bki-distrib` | `distrib_x/y/z` position profiles | [docs/bki-distrib.md](docs/bki-distrib.md) |
+| `bki-bkg` | list, select and locate the backgrounds of an IR | [docs/bki-bkg.md](docs/bki-bkg.md) |
+
+Each page opens with a description and usage, then the command's `--help`
+(checked against the code by `tests/test_docs.py`), then its examples and
+explanations.  Sections that used to
+be here:
+
+| Section | Now in |
+|---------|--------|
+| Usage examples: extracting an IR | [bki-extract](docs/bki-extract.md#examples) |
+| perl vs ggd VD GDML | [bki-extract](docs/bki-extract.md#perl-vs-ggd-vd-gdml) |
+| GDML backends | [bki-extract](docs/bki-extract.md#gdml-backends) |
+| FHiCL expansion and cache | [bki-extract](docs/bki-extract.md#fhicl-input) |
+| Inspecting an IR (`-l` / `-L`) | [bki-plot](docs/bki-plot.md#inspecting-an-ir) |
+| Plotting the detector, backgrounds, generation surfaces | [bki-plot](docs/bki-plot.md#plotting-the-detector) |
+| `--surface` syntax | [bki-plot](docs/bki-plot.md#--surface-syntax) |
+| Picking individual placements | [bki-plot](docs/bki-plot.md#picking-individual-placements) |
+| Highlighting volumes | [bki-plot](docs/bki-plot.md#highlighting-volumes) |
+| Adding a measurement | [bki-measure](docs/bki-measure.md#adding-a-measurement) |
+| The formula and the generated distribution (Npx) | [bki-distrib](docs/bki-distrib.md#the-formula-and-the-generated-distribution-npx) |
 
 ---
 
@@ -893,14 +260,14 @@ bki-plot planes.json -L --kind struct --highlight '^volTPCPlaneU$#@_PV_Bot'
 | `pos`  | centre `[x, y, z]` in cm, in the IR frame |
 | `ext`  | full extents `[dx, dy, dz]` in cm |
 | `rot`  | 3×3 rotation matrix in the IR frame |
-| `meta` | kind-specific metadata: GDML placement `path` for geometry volumes (see [Picking individual placements](#picking-individual-placements)) and, when the GDML names its physvols (ggd), the physvol name `pv` and the physvol names along the path `pvpath` (`placeDetEnclosure/…/volTPC_PV_Bot0/volTPCPlaneU_PV`); nuclide, BqPercc, surface, index, … for radio |
+| `meta` | kind-specific metadata: GDML placement `path` for geometry volumes (see [Picking individual placements](docs/bki-plot.md#picking-individual-placements)) and, when the GDML names its physvols (ggd), the physvol name `pv` and the physvol names along the path `pvpath` (`placeDetEnclosure/…/volTPC_PV_Bot0/volTPCPlaneU_PV`); nuclide, BqPercc, surface, index, … for radio |
 
 For radio entries, `meta` also holds, for each axis with a `distrib_<axis>`
 formula: the formula, `distrib_<axis>_range` (the full box range it is
 sampled over, the source of truth), `distrib_<axis>_eff_range` and
 `distrib_<axis>_formula_eff_range`, plus `distrib_eff_containment` and
 `distrib_eff_npx` (see [the formula and the generated
-distribution](#the-formula-and-the-generated-distribution-npx)). The
+distribution](docs/bki-distrib.md#the-formula-and-the-generated-distribution-npx)). The
 effective ranges are derived by `bki-extract` with ROOT, not module
 parameters. These are world coordinates. The box (`pos`/`ext`) is the full
 box on the axes without a formula and the generated effective range on the
@@ -912,7 +279,7 @@ even when none of the producer's boxes resolve. The `name` of a radio volume
 is its producer label. ±inf values are stored as the strings `"inf"` and
 `"-inf"`.
 
-`frame` is present only for IRs written with `bki-extract --frame VOLNAME`.
+`frame` is present only for IRs written with [`bki-extract --frame VOLNAME`](docs/bki-extract.md).
 The IR frame is then that volume's local frame; `frame.pos` / `frame.rot`
 are its world placement (`world = pos + rot @ local`).  Without `frame`,
 the IR frame is the world.  `meta.path` always starts at the world volume.
@@ -1026,7 +393,7 @@ plot_groups(groups, "profiles.pdf", log=True)           # one page per group
 `g.dist` is the group's formula as a `Distribution` of the internal module
 `duneradgeo._tf1`: one formula on one range with one Npx, which owns its
 TF1 (see [the formula and the generated
-distribution](#the-formula-and-the-generated-distribution-npx)).
+distribution](docs/bki-distrib.md#the-formula-and-the-generated-distribution-npx)).
 `_tf1.distribution(formula, lo, hi, npx=100)` returns the same object for
 the same arguments (the 256 most recent are cached;
 `distribution.cache_clear()` drops them).
@@ -1133,6 +500,8 @@ Both mirror LArSoft's `cet::search_path` behaviour (first-match-wins).
 | `tests/test_fcl.py` | the FHiCL parser, `#include` expansion and `producer_volumes` (on a small GDML of boxes) | nothing (ROOT-free) |
 | `tests/test_formula_lines.py` | the formula text layout of the `bki-distrib` pages | nothing (ROOT-free) |
 | `tests/test_select.py` | the `--pick` / `--surface` / `--highlight` specs and `select_volumes` | nothing (ROOT-free) |
+| `tests/test_cli.py`, `tests/test_extract_cli.py`, `tests/test_plot_cli.py`, `tests/test_measure_cli.py`, `tests/test_distrib_cli.py`, `tests/test_scripts_cli.py` | the click/rich command lines of the `bki-*` commands and scripts | click and rich (skipped without them) |
+| `tests/test_docs.py` | the `--help` text of each command is in its `docs/` page; the links between README and `docs/` resolve | the help check needs click and rich |
 | `tests/test_bkg.py` | `bki-bkg`: backgrounds, select expressions, regions, suggestions, `--json` output | nothing; the table rendering needs `rich` (skipped without it) |
 
 Each file runs on its own or under pytest (not a dependency).  On the host:
