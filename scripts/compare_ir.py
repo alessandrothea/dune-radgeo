@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """
-Compare two JSON IR files volume by volume (regression check).
+Compare two JSON IR files volume by volume (regression check): REF is the
+reference JSON IR, NEW the one to check against it.
 
-Usage:
+Examples:
+
+\b
     compare_ir.py ref.json new.json
     compare_ir.py ref.json new.json --tol 0.1 --ignore-rot '^volTPC'
     compare_ir.py ref.json new.json --only-common -v
@@ -18,13 +21,15 @@ Exits with status 1 if any group fails.
 """
 from __future__ import annotations
 
-import argparse
 import re
-import sys
 from collections import Counter, defaultdict
+from pathlib import Path
 
+import click
 import numpy as np
+from rich.text import Text
 
+from duneradgeo._cli import CONTEXT_SETTINGS, CliError, VariadicOption, console, warn
 from duneradgeo.ir import IRCollection
 
 
@@ -72,38 +77,57 @@ def _compare(a: list, b: list, tol: float, rot_tol: float, check_rot: bool) -> t
     return ok, msg
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser(
-        description=__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    ap.add_argument("ref", help="reference JSON IR")
-    ap.add_argument("new", help="JSON IR to check against the reference")
-    ap.add_argument("--tol", type=float, default=0.01,
-                    help="position / extent tolerance in cm (default: 0.01)")
-    ap.add_argument("--rot-tol", type=float, default=1e-6,
-                    help="max abs difference of rotation-matrix elements (default: 1e-6)")
-    ap.add_argument("--kinds", nargs="+", default=None,
-                    help="only compare these kinds (anode opdet cathode fieldshaper struct radio)")
-    ap.add_argument("--ignore-rot", nargs="+", default=[], metavar="NAME_RE",
-                    help="do not fail on rotation differences of these volume names")
-    ap.add_argument("--only-common", action="store_true",
-                    help="do not fail on groups present in only one IR")
-    ap.add_argument("--verbose", "-v", action="store_true",
-                    help="also list the groups that pass")
-    args = ap.parse_args()
+def _status(ok: bool | None) -> Text:
+    """'ok  ' green, 'FAIL' bold red, 'skip' dim (words unchanged when piped)."""
+    if ok is None:
+        return Text("skip", style="dim")
+    return Text("ok  ", style="green") if ok else Text("FAIL", style="bold red")
 
-    ra, rb = IRCollection.load(args.ref), IRCollection.load(args.new)
+
+def _row(cons, status: Text, label: str, msg: str, width: int = 50) -> None:
+    line = Text.assemble(status, "  ", f"{label:<{width}} ", msg)
+    cons.print(line, soft_wrap=True)
+
+
+def _load(path: str) -> IRCollection:
+    if not Path(path).is_file():
+        raise CliError(f"'{path}' not found")
+    try:
+        return IRCollection.load(path)
+    except (OSError, ValueError, KeyError) as exc:
+        raise CliError(f"cannot read '{path}': {exc}") from None
+
+
+@click.command(context_settings=CONTEXT_SETTINGS, help=__doc__)
+@click.argument("ref")
+@click.argument("new")
+@click.option("--tol", type=float, default=0.01, show_default=True,
+              help="position / extent tolerance in cm")
+@click.option("--rot-tol", type=float, default=1e-6, show_default=True,
+              help="max abs difference of rotation-matrix elements")
+@click.option("--kinds", cls=VariadicOption, metavar="KIND...", default=None,
+              help="only compare these kinds (anode opdet cathode fieldshaper struct radio)")
+@click.option("--ignore-rot", cls=VariadicOption, metavar="NAME_RE...", default=(),
+              help="do not fail on rotation differences of these volume names")
+@click.option("--only-common", is_flag=True,
+              help="do not fail on groups present in only one IR")
+@click.option("--verbose", "-v", is_flag=True, help="also list the groups that pass")
+def cli(ref, new, tol, rot_tol, kinds, ignore_rot, only_common, verbose):
+    ra, rb = _load(ref), _load(new)
+    cons = console()
     fa = (ra.frame or {}).get("volume", "world")
     fb = (rb.frame or {}).get("volume", "world")
-    print(f"[info] ref: {len(ra.volumes)} entries, frame {fa}   new: {len(rb.volumes)} entries, frame {fb}")
+    cons.print(Text(f"[info] ref: {len(ra.volumes)} entries, frame {fa}   "
+                    f"new: {len(rb.volumes)} entries, frame {fb}", style="dim"), soft_wrap=True)
     if fa != fb:
-        print(f"[warn] frames differ ({fa} vs {fb}); positions are not comparable",
-              file=sys.stderr)
+        warn(f"frames differ ({fa} vs {fb}); positions are not comparable")
 
-    kinds = set(args.kinds) if args.kinds else None
+    kinds = set(kinds) if kinds else None
     ga, gb = _groups(ra, kinds), _groups(rb, kinds)
-    ignore_rot = [re.compile(p) for p in args.ignore_rot]
+    try:
+        ignore = [re.compile(p) for p in ignore_rot]
+    except re.error as exc:
+        raise CliError(f"bad --ignore-rot pattern: {exc}") from None
 
     failed = 0
     for key in sorted(set(ga) | set(gb)):
@@ -111,18 +135,23 @@ def main() -> None:
         label = f"{kind:<11} {name}{'/' + part if part else ''}"
         if key not in ga or key not in gb:
             side = "ref" if key in ga else "new"
-            print(f"{'skip' if args.only_common else 'FAIL'}  {label:<50} only in {side}")
-            failed += not args.only_common
+            _row(cons, _status(None if only_common else False), label, f"only in {side}")
+            failed += not only_common
             continue
-        check_rot = not any(p.search(name) for p in ignore_rot)
-        ok, msg = _compare(ga[key], gb[key], args.tol, args.rot_tol, check_rot)
+        check_rot = not any(p.search(name) for p in ignore)
+        ok, msg = _compare(ga[key], gb[key], tol, rot_tol, check_rot)
         failed += not ok
-        if not ok or args.verbose:
-            print(f"{'ok  ' if ok else 'FAIL'}  {label:<50} {msg}")
+        if not ok or verbose:
+            _row(cons, _status(ok), label, msg)
 
     n = len(set(ga) | set(gb))
-    print(f"[info] {n - failed}/{n} groups agree")
-    sys.exit(1 if failed else 0)
+    cons.print(Text(f"[info] {n - failed}/{n} groups agree", style="dim"), soft_wrap=True)
+    if failed:
+        raise SystemExit(1)
+
+
+def main(argv: list | None = None) -> None:
+    cli.main(args=argv, prog_name="compare_ir.py")
 
 
 if __name__ == "__main__":

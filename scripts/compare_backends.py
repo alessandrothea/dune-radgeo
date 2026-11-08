@@ -2,9 +2,12 @@
 """
 Compare the python and root GDML backends on the same GDML files.
 
-Usage (the root backend needs ROOT with TGeo/GDML, e.g. in the dunesw
-container: dsw py scripts/compare_backends.py ...):
+The root backend needs ROOT with TGeo/GDML, e.g. in the dunesw container
+(dsw py scripts/compare_backends.py ...).
 
+Examples:
+
+\b
     compare_backends.py geometry.gdml [more.gdml ...]
     compare_backends.py geometry.gdml --patterns '^volCryostat$' '^volArapuca' -v
 
@@ -22,12 +25,15 @@ Exits with status 1 if anything differs beyond --tol / --rot-tol.
 """
 from __future__ import annotations
 
-import argparse
-import sys
 import time
+from pathlib import Path
 
+import click
 import numpy as np
+from rich.text import Text
 
+from duneradgeo._cli import (CONTEXT_SETTINGS, CliError, VariadicOption, console,
+                             info)
 from duneradgeo._gdml import load_geometry
 from duneradgeo._profiles import detect_profile, get_profile
 
@@ -37,8 +43,7 @@ _KINDS = ("anode", "opdet", "cathode", "fieldshaper", "struct", "passive")
 def _load(path: str, backend: str, verbose: bool):
     t0 = time.time()
     geo = load_geometry(path, backend=backend, verbose=verbose)
-    print(f"[info] {backend:<6} {len(geo.volume_names)} volumes  "
-          f"({time.time() - t0:.1f}s)")
+    info(f"{backend:<6} {len(geo.volume_names)} volumes  ({time.time() - t0:.1f}s)")
     return geo
 
 
@@ -46,16 +51,19 @@ class _Report:
     def __init__(self, verbose: bool):
         self.verbose = verbose
         self.failed  = 0
+        self.cons    = console()
 
     def line(self, ok: bool, label: str, msg: str, details: list[str] = ()) -> None:
         self.failed += not ok
         if ok and not self.verbose:
             return
-        print(f"{'ok  ' if ok else 'FAIL'}  {label:<34} {msg}")
+        status = Text("ok  ", style="green") if ok else Text("FAIL", style="bold red")
+        self.cons.print(Text.assemble(status, f"  {label:<34} {msg}"), soft_wrap=True)
         for d in list(details)[:8]:
-            print(f"        {d}")
+            self.cons.print(Text(f"        {d}", style="dim"), soft_wrap=True)
         if len(details) > 8:
-            print(f"        … {len(details) - 8} more")
+            self.cons.print(Text(f"        … {len(details) - 8} more", style="dim"),
+                            soft_wrap=True)
 
 
 def _maxdiff(a, b) -> float:
@@ -150,10 +158,10 @@ def _cmp_placements(py, rt, kind: str, patterns: list[str], rep: _Report,
 
 def compare(path: str, patterns: list[str] | None, tol: float, rot_tol: float,
             verbose: bool) -> int:
-    print(f"== {path}")
+    rep = _Report(verbose)
+    rep.cons.print(Text(f"== {path}", style="bold"), soft_wrap=True)
     py = _load(path, "python", False)
     rt = _load(path, "root", verbose)
-    rep = _Report(verbose)
 
     va, vb = py.volume_names, rt.volume_names
     rep.line(va == vb and py._world == rt._world, "volumes / world",
@@ -167,34 +175,44 @@ def compare(path: str, patterns: list[str] | None, tol: float, rot_tol: float,
     else:
         key = detect_profile(py.volume_names)
         _, prof = get_profile(key)
-        print(f"[info] profile {key or 'generic'}")
+        info(f"profile {key or 'generic'}")
         groups = [(k, prof.get(f"{k}_patterns", [])) for k in _KINDS]
     for kind, pats in groups:
         if pats:
             _cmp_placements(py, rt, kind, pats, rep, tol, rot_tol)
 
-    print(f"[info] {'agree' if not rep.failed else f'{rep.failed} check(s) differ'}")
+    # on stdout, as before, so `| grep agree` keeps working
+    rep.cons.print(Text(f"[info] {'agree' if not rep.failed else f'{rep.failed} check(s) differ'}",
+                        style="dim"), soft_wrap=True)
     return rep.failed
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("gdml", nargs="+", help="GDML file(s)")
-    ap.add_argument("--patterns", nargs="+", default=None, metavar="RE",
-                    help="volume-name patterns to compare placements of "
-                         "(default: the detected profile's)")
-    ap.add_argument("--tol", type=float, default=1e-3,
-                    help="position / extent tolerance in cm (default: 1e-3)")
-    ap.add_argument("--rot-tol", type=float, default=1e-6,
-                    help="max abs difference of rotation-matrix elements (default: 1e-6)")
-    ap.add_argument("--verbose", "-v", action="store_true",
-                    help="also list the checks that pass, and show ROOT's import output")
-    args = ap.parse_args()
+@click.command(context_settings=CONTEXT_SETTINGS, help=__doc__)
+@click.argument("gdml", nargs=-1, required=True)
+@click.option("--patterns", cls=VariadicOption, metavar="RE...", default=None,
+              help="volume-name patterns to compare placements of "
+                   "(default: the detected profile's)")
+@click.option("--tol", type=float, default=1e-3, show_default=True,
+              help="position / extent tolerance in cm")
+@click.option("--rot-tol", type=float, default=1e-6, show_default=True,
+              help="max abs difference of rotation-matrix elements")
+@click.option("--verbose", "-v", is_flag=True,
+              help="also list the checks that pass, and show ROOT's import output")
+def cli(gdml, patterns, tol, rot_tol, verbose):
+    for p in gdml:
+        if not Path(p).is_file():
+            raise CliError(f"'{p}' not found")
+    patterns = list(patterns) if patterns else None
+    try:
+        failed = sum(compare(p, patterns, tol, rot_tol, verbose) > 0 for p in gdml)
+    except (ImportError, OSError, ValueError, RuntimeError) as exc:
+        raise CliError(f"{type(exc).__name__}: {exc}") from None
+    if failed:
+        raise SystemExit(1)
 
-    failed = sum(compare(p, args.patterns, args.tol, args.rot_tol, args.verbose) > 0
-                 for p in args.gdml)
-    sys.exit(1 if failed else 0)
+
+def main(argv: list | None = None) -> None:
+    cli.main(args=argv, prog_name="compare_backends.py")
 
 
 if __name__ == "__main__":
