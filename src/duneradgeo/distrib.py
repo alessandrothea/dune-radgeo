@@ -215,22 +215,23 @@ def page_title(g: DistribGroup, nmax: int | None = None) -> str:
     return what if label == f"{n} producers" else f"{label} · {what}"
 
 
-def page_subtitle(g: DistribGroup, source: str = "") -> str:
-    """Where the distribution sits, its sampling volume(s) and `source`,
-    joined by ' · '."""
-    pct = f"{100 * g.containment:g}%"
+def location_rows(g: DistribGroup, source: str = "") -> list[tuple]:
+    """(key, value) rows of the side panel's "Location" section: what the
+    distribution is applied to, how much of it matters, and where it comes from."""
     lo, hi = g.eff
+    pct = f"{100 * g.containment:g}%"
     plane = [s for s in g.surfaces if s.startswith(f"plane_{g.axis}@")]
     if plane:
-        where = (f"layer at {g.axis} ≈ {float(plane[0].split('@')[1]):.1f} cm, "
-                 f"{pct} in {hi - lo:.1f} cm")
+        c = float(plane[0].split("@")[1])
+        rows = [("shape", f"thin layer at {g.axis} = {c:.1f} cm"),
+                (f"{pct} within", f"{hi - lo:.1f} cm  ({_fmt_range(g.eff)})")]
     else:
-        where = f"{pct} in [{lo:.1f}, {hi:.1f}] cm"
-        other = [_surface_text(s) for s in g.surfaces]
-        if other:
-            where = f"{', '.join(other)}, {where}"
-    parts = [where] + list(g.sources) + ([source] if source else [])
-    return "  ·  ".join(parts)
+        shape = ", ".join(_surface_text(s) for s in g.surfaces) or "—"
+        rows = [("shape", shape), (f"{pct} within", f"{_fmt_range(g.eff)} cm")]
+    rows.append(("volume", ", ".join(g.sources) or "—"))
+    if source:
+        rows.append(("source", source))
+    return rows
 
 
 def print_groups(groups: list[DistribGroup]) -> None:
@@ -372,7 +373,7 @@ _TOP    = 0.875          # top of the plot and of the side panel
 _AX_W   = 0.565          # plot width
 _XLABEL_H = 0.085        # room for the x label (and tick labels) under a plot
 _ZOOM_SPLIT = 0.5        # share of the plot height for the full-range plot
-_TITLE_Y, _SOURCE_Y, _FOOT_Y = 0.950, 0.915, 0.015
+_TITLE_Y, _FOOT_Y = 0.950, 0.015
 _PANEL  = 0.665          # side panel left edge
 _HEADING_H   = 0.035     # side panel heading, down to the text under it
 _SECTION_GAP = 0.035     # side panel: notes to the next heading
@@ -505,9 +506,23 @@ def _draw_plots(fig, g: DistribGroup, log: bool, zoom: bool,
     return frac
 
 
-def _draw_side_panel(fig, g: DistribGroup, frac: tuple | None) -> None:
-    """The right-hand panel: the sampling table (with the measured fractions
-    `frac`, if given), notes, and the producers."""
+def _kv_table(fig, x0: float, y: float, rows: list[tuple], base: float = 9.0) -> float:
+    """Draw (key, value) rows as aligned monospace text, the keys in bold, from
+    (x0, y) downwards; returns the y below the table."""
+    kw = max(len(k) for k, _ in rows)
+    fs = _mono_size([f"{k:<{kw}}  {v}" for k, v in rows], fig, x0, base)
+    fig.text(x0, y, "\n".join(k for k, _ in rows), family=_MONO, fontsize=fs,
+             fontweight="bold", va="top", linespacing=_LS_TABLE)
+    xv = x0 + (kw + 2) * _CHAR_W * fs / 72 / fig.get_figwidth()
+    fig.text(xv, y, "\n".join(v for _, v in rows), family=_MONO, fontsize=fs,
+             va="top", linespacing=_LS_TABLE)
+    return y - _text_h(len(rows), fs, _LS_TABLE, fig)
+
+
+def _draw_side_panel(fig, g: DistribGroup, frac: tuple | None,
+                     source: str = "") -> None:
+    """The right-hand panel: the location, the sampling table (with the
+    measured fractions `frac`, if given) and notes, and the producers."""
     cont = f"{100 * g.containment:g}%"
     if frac is not None:
         cont += (f"  (measured: generated {100 * frac[0]:.2f}%,"
@@ -517,10 +532,7 @@ def _draw_side_panel(fig, g: DistribGroup, frac: tuple | None) -> None:
              + ("*" if g.eff_computed else "")),
             ("", _fmt_range(g.formula_eff, 9) + " cm  formula"),
             ("containment", cont),
-            ("Npx", f"{g.npx}  (TF1::GetRandom table)"),
-            ("volume", ", ".join(g.sources) or "—")]
-    kw = max(len(k) for k, _ in rows)
-    sampling = [f"{k:<{kw}}  {v}" for k, v in rows]
+            ("Npx", f"{g.npx}  (TF1::GetRandom table)")]
 
     names = list(g.producers.items())
     shown = names[:_MAX_PRODUCERS]
@@ -534,12 +546,10 @@ def _draw_side_panel(fig, g: DistribGroup, frac: tuple | None) -> None:
         notes.insert(0, f"* recomputed for --npx {g.npx} (the IR has another Npx)")
 
     x0, y = _PANEL, _TOP
+    fig.text(x0, y, "Location", fontsize=_HEADING_SIZE, fontweight="bold", va="top")
+    y = _kv_table(fig, x0, y - _HEADING_H, location_rows(g, source)) - _SECTION_GAP
     fig.text(x0, y, "Sampling", fontsize=_HEADING_SIZE, fontweight="bold", va="top")
-    y -= _HEADING_H
-    fs = _mono_size(sampling, fig, x0, 9.0)
-    fig.text(x0, y, "\n".join(sampling), family=_MONO, fontsize=fs, va="top",
-             linespacing=_LS_TABLE)
-    y -= _text_h(len(sampling), fs, _LS_TABLE, fig) + _NOTE_GAP
+    y = _kv_table(fig, x0, y - _HEADING_H, rows) - _NOTE_GAP
     fig.text(x0, y, "\n".join(notes), fontsize=_NOTE_SIZE, color=_GREY, va="top",
              linespacing=_LS_NOTE)
     y -= _text_h(len(notes), _NOTE_SIZE, _LS_NOTE, fig) + _SECTION_GAP
@@ -567,12 +577,10 @@ def _draw_page(fig, g: DistribGroup, log: bool, source: str,
     """One distribution on `fig`: title, plot (+ zoom), formula box, side panel."""
     _fit_text(fig, _TITLE_Y, lambda k: page_title(g, k), len(nuclides(g)),
               fontsize=15, fontweight="bold")
-    fig.text(_LEFT, _SOURCE_Y, page_subtitle(g, source), fontsize=10,
-             color=_GREY, va="baseline")
     fig.text(_RIGHT, _FOOT_Y, f"{page} / {npages}", fontsize=9, color=_GREY, ha="right")
     box_top = _draw_formula_box(fig, g)
     frac = _draw_plots(fig, g, log, zoom, bottom=box_top + _XLABEL_H)
-    _draw_side_panel(fig, g, frac)
+    _draw_side_panel(fig, g, frac, source)
 
 
 def plot_groups(groups: list[DistribGroup], out_path: str, title: str = "",
@@ -581,7 +589,7 @@ def plot_groups(groups: list[DistribGroup], out_path: str, title: str = "",
     """
     One page per distribution: a multi-page PDF when `out_path` ends in .pdf,
     otherwise one file per distribution (<stem>_NN<suffix>).
-    `title` (e.g. the source FHiCL) ends the subtitle of each page;
+    `title` (e.g. the source FHiCL) is shown in each page's Location section;
     `doc_title` is the PDF's Title metadata.  Returns the files written.
     """
     plt = import_mpl("--list works without it")
@@ -652,7 +660,7 @@ def main() -> None:
                          "added below the plot when the effective range is "
                          "narrower than half the full range)")
     ap.add_argument("--title", default=None,
-                    help="text ending each page subtitle (default: the source FHiCL name)")
+                    help="source shown in the Location section (default: the source FHiCL name)")
     args = ap.parse_args()
 
     ir_path = Path(args.ir_file)

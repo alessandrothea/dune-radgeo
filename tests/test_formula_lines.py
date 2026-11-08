@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _runner import run_tests  # noqa: E402
 
 from duneradgeo.distrib import (DistribGroup, formula_lines, group_label,  # noqa: E402
-                                page_subtitle, page_title, raw_formula_lines)
+                                location_rows, page_title, raw_formula_lines)
 
 # the upper-mesh and bulk K42 profiles of tests/test_tf1.py
 MESH = "(7.2257e+4*TMath::Exp(-(x+320.)*(x+320.)/(2.*0.5*0.5)))+1."
@@ -201,13 +201,17 @@ def test_page_title():
         "x profile, 2 producers (K40)"
 
 
-def test_page_subtitle():
+def test_location_rows():
     layer = _group(MESH_PRODUCERS, surfaces=["plane_x@-320.917"],
                    eff=(-323.082, -318.753))
-    assert page_subtitle(layer, "f.fcl") == ("layer at x ≈ -320.9 cm, 99% in 4.3 cm"
-                                             "  ·  volume_rand:volCryostat  ·  f.fcl")
-    assert page_subtitle(_group(MESH_PRODUCERS)) == \
-        "bulk, 99% in [-425.1, 416.0] cm  ·  volume_rand:volCryostat"
+    assert location_rows(layer, "f.fcl") == [
+        ("shape", "thin layer at x = -320.9 cm"),
+        ("99% within", "4.3 cm  ([-323.082, -318.753])"),
+        ("volume", "volume_rand:volCryostat"),
+        ("source", "f.fcl")]
+    assert location_rows(_group(MESH_PRODUCERS)) == [
+        ("shape", "bulk"), ("99% within", "[-425.120, 415.960] cm"),
+        ("volume", "volume_rand:volCryostat")]
 
 
 if __name__ == "__main__":

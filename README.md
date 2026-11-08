@@ -415,11 +415,13 @@ effective ranges are much narrower than the full range, a zoomed view on
 them is added below. Producers that share a formula and range share a page,
 which lists them. Each page is headed by the producers' common name and
 their nuclides (`UpperMesh1x8x14 · x profile, 7 producers (K42, Po218, …)`;
-a single producer gives its own name), above a line saying where the
-distribution sits (`layer at x ≈ -320.9 cm, 99% in 4.3 cm`, or the range
-holding 99% of it), its sampling volume and the source FHiCL. `--list`
-prints the same name on each `[n]` line. Coordinates are world coordinates, which is what the
-generator uses, even for IRs written with `--frame`.
+a single producer gives its own name). The side panel has a Location
+section (shape: a thin layer at x = c or the surface
+label; the range holding the containment fraction; the sampling volume; the
+source FHiCL), a Sampling section and the producers; parameter names are
+in bold. `--list` prints the same name on each
+`[n]` line. Coordinates are world coordinates, which is what the generator
+uses, even for IRs written with `--frame`.
 
 ```
 bki-distrib <ir.json> [options]
@@ -440,8 +442,8 @@ bki-distrib <ir.json> [options]
   --no-zoom           no zoomed view on the effective ranges (default: added
                       below the plot when they are narrower than half the
                       full range; window = their span ± 25%)
-  --title TEXT        text ending each page subtitle (default: the source FHiCL
-                      name)
+  --title TEXT        source shown in the Location section (default: the source
+                      FHiCL name)
 ```
 
 ```bash
