@@ -48,8 +48,9 @@ Usage: radgeo extract [OPTIONS] INPUT
   cryostat differently (a global offset), so their IRs in the frame of
   volEnclosureTPC overlay.  --with-passive adds the profile's passive material
   (steel shell, insulation, support, shielding, cavern) as struct volumes.
-  --gdml-backend root reads the GDML with ROOT (TGeoManager::Import);
-  scripts/compare_ir.py compares the two backends' IRs.
+  --gdml-backend root reads the GDML with ROOT (TGeoManager::Import), pyg4ometry
+  with the pyg4ometry package; scripts/compare_ir.py compares the IRs of two
+  backends.
 
   Non-box solids become boxes: tubes and tori their bounding box, unions one box
   per primitive operand (e.g. each straight tube and corner of a field-shaper
@@ -96,10 +97,11 @@ Options:
                                   100]
   --no-geometry                   skip GDML parsing even when a FCL is given
   --gdml GDML                     override GDML path (when input is FCL)
-  --gdml-backend [python|root]    GDML reader: the pure-Python parser, or ROOT's
+  --gdml-backend [python|root|pyg4ometry]
+                                  GDML reader: the pure-Python parser, ROOT's
                                   TGeoManager::Import (needs ROOT with
-                                  TGeo/GDML, e.g. in the dunesw container)
-                                  [default: python]
+                                  TGeo/GDML, e.g. in the dunesw container), or
+                                  pyg4ometry (optional extra)  [default: python]
   --fcl-cache DIR                 directory where expanded FCL files are cached
                                   and reused across runs  [default:
                                   /home/user/.cache/radgeo/fcl]
@@ -190,6 +192,7 @@ radgeo extract dunevd10kt_v7_full10kt_ggd.gdml -o ggd_passive.json --with-passiv
 |---------|--------|-------|
 | `python` (default) | built-in XML parser (`GDMLGeometry`) | NumPy |
 | `root` | `TGeoManager::Import` (`RootGDMLGeometry`) | ROOT with TGeo/GDML (dunesw) |
+| `pyg4ometry` | `pyg4ometry.gdml.Reader` (`Pyg4GDMLGeometry`) | the `pyg4ometry` extra |
 
 Both fill the same tables (volumes and placements, box/tube/torus
 decomposition, boolean operands) and share the search, so placement paths, physvol
@@ -202,12 +205,36 @@ skipped by both; for radio boxes the ROOT backend still uses ROOT's
 bounding box, while the built-in parser warns and skips them.
 Reading with ROOT takes a few seconds instead of a fraction of one.
 
+`pyg4ometry` is an opt-in extra (`pip install ".[pyg4ometry]"`, or `uv sync
+--extra pyg4ometry`), not installed by default: it brings scipy, pandas, sympy
+and VTK, about 1 GB.  It evaluates what the built-in parser cannot: `<constant>`
+and `<variable>` definitions, expressions and units in any attribute, loops,
+scales and `<!ENTITY>` includes.  It takes about 8 s on the VD 1×8×14 geometry
+(the built-in parser 0.1 s) and agrees with the built-in parser on the three VD GDMLs in
+`examples/gdml/` (`compare_backends.py --backends python pyg4ometry`).  Notes:
+
+- pyg4ometry imports `vtk` although the reader never uses it; when `vtk` is not
+  installed a placeholder module is supplied for the import, so a VTK-free
+  install works.
+- A solid that is not a box, tube, torus or boolean gets the bounding box of its
+  pyg4ometry mesh (as in the ROOT backend), so radio boxes work for it; it still
+  yields no box decomposition.
+- pyg4ometry names an unnamed physvol `<volume>_PV` itself, so the physvol
+  names (IR `meta.pv`) are read from the GDML's XML.  If that cannot be parsed
+  (`<!ENTITY>` includes), a physvol named exactly `<volume>_PV` is reported as
+  unnamed.
+- Assemblies, replicas, divisions and parameterised volumes are not followed:
+  they are counted and reported on stderr.
+
 `scripts/compare_backends.py` loads one or more GDMLs with both backends
 and compares volumes, solid tables and every profile placement (paired by
 path), exiting with status 1 on a difference:
 
 ```bash
 dsw -C <area> py /path/to/dune-radgeo/scripts/compare_backends.py geometry.gdml [more.gdml] [-v]
+
+# any two backends: --backends REF OTHER (default python root)
+python /path/to/dune-radgeo/scripts/compare_backends.py geometry.gdml --backends python pyg4ometry
 
 # or through the IR
 dsw -C <area> exec radgeo extract geometry.gdml -o /abs/py.json --gdml-backend python

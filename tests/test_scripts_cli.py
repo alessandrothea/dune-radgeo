@@ -141,7 +141,7 @@ def test_help_options():
         "compare_ir": ["REF", "NEW", "--tol", "--rot-tol", "--kinds KIND...",
                        "--ignore-rot NAME_RE...", "--only-common", "-v, --verbose",
                        "compare_ir.py ref.json new.json --only-common -v", "-h, --help"],
-        "compare_backends": ["GDML...", "--patterns RE...", "--tol", "--rot-tol",
+        "compare_backends": ["GDML...", "--backends [python|root|pyg4ometry]", "--patterns RE...", "--tol", "--rot-tol",
                              "-v, --verbose", "[default: 0.001]", "-h, --help",
                              "compare_backends.py geometry.gdml [more.gdml ...]"],
         "run_notebook": ["IR_FILE", "-o, --out", "--timeout", "[default: 120]",

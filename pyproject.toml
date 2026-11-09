@@ -22,6 +22,12 @@ dependencies = [
     "nbconvert",
 ]
 
+# Optional: radgeo extract --gdml-backend pyg4ometry.  A package extra, so
+# `pip install ".[pyg4ometry]"` or `uv sync --extra pyg4ometry`; never installed
+# by default (it pulls in scipy, pandas, sympy and vtk, about 1 GB).
+[project.optional-dependencies]
+pyg4ometry = ["pyg4ometry"]
+
 # PyROOT for the host venv, from the `root` pip wheel: it evaluates the
 # distrib_x/y/z TF1 formulas (radgeo extract of producers with distrib_*,
 # radgeo profiles, tests/test_tf1.py) and is the ROOT that --gdml-backend root

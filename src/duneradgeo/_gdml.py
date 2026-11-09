@@ -1,10 +1,12 @@
 """GDML geometry: world-frame positions and extents of named volumes.
 
-Two backends share the queries of :class:`GeometryBase`:
+Three backends share the queries of :class:`GeometryBase`:
 
 * ``python`` — :class:`GDMLGeometry`, a pure-Python parser (numpy only);
 * ``root``   — :class:`~duneradgeo._gdml_root.RootGDMLGeometry`, which reads
-  the GDML with ROOT's ``TGeoManager::Import`` (needs ROOT with TGeo/GDML).
+  the GDML with ROOT's ``TGeoManager::Import`` (needs ROOT with TGeo/GDML);
+* ``pyg4ometry`` — :class:`~duneradgeo._gdml_pyg4.Pyg4GDMLGeometry`, which
+  reads it with the pyg4ometry package (optional extra ``pyg4ometry``).
 
 :func:`load_geometry` picks one by name.
 """
@@ -43,6 +45,35 @@ def _arc_points(r: float, phi0: float, dphi: float) -> np.ndarray:
                           np.floor((phi0 + dphi) / (np.pi / 2)) + 1) * np.pi / 2
         phis = np.concatenate([[phi0, phi0 + dphi], quads])
     return r * np.column_stack([np.cos(phis), np.sin(phis)])
+
+
+def _xy_bbox(xy: np.ndarray, z0: float, z1: float) -> tuple:
+    """(centre, ext) of the box spanning the (N, 2) points `xy` and z in [z0, z1]."""
+    lo = np.array([xy[:, 0].min(), xy[:, 1].min(), z0])
+    hi = np.array([xy[:, 0].max(), xy[:, 1].max(), z1])
+    return (lo + hi) / 2, hi - lo
+
+
+def tube_bbox(rmin: float, rmax: float, hz: float, phi0: float, dphi: float) -> tuple:
+    """(centre, ext) of the local bounding box of a GDML tube (half-length `hz`)."""
+    pts = np.vstack([_arc_points(r, phi0, dphi) for r in (rmin, rmax)])
+    return _xy_bbox(pts, -hz, hz)
+
+
+def torus_bbox(rtor: float, rmax: float, phi0: float, dphi: float) -> tuple:
+    """(centre, ext) of the local bounding box of a GDML torus."""
+    if rtor >= rmax:
+        # the cross-section at angle phi spans radii rtor ± rmax along
+        # (cos phi, sin phi): in x–y the torus covers the annular sector of
+        # a tube with those radii
+        pts = np.vstack([_arc_points(rtor - rmax, phi0, dphi),
+                         _arc_points(rtor + rmax, phi0, dphi)])
+    else:
+        # self-intersecting torus: pad the centre arc by rmax
+        arc = _arc_points(rtor, phi0, dphi)
+        pts = np.vstack([arc - rmax, arc + rmax])
+    return _xy_bbox(pts, -rmax, rmax)
+
 
 def _placed_aabb(bbox: tuple, pos: np.ndarray, rot: np.ndarray) -> tuple:
     """(lo, hi) of box `bbox` = (centre, ext) mapped by x -> rot @ x + pos:
@@ -358,27 +389,16 @@ class GDMLGeometry(GeometryBase):
             elif child.tag == "tube":
                 phi0 = self._fval(child.get("startphi", "0")) * au
                 dphi = self._fval(child.get("deltaphi", str(2 * np.pi / au))) * au
-                pts  = np.vstack([
-                    _arc_points(self._fval(child.get(k, "0")) * u, phi0, dphi)
-                    for k in ("rmin", "rmax")])
-                hz   = self._fval(child.get("z", "0")) * u / 2
-                self._prims[name] = self._aabb(pts, -hz, hz)
+                self._prims[name] = tube_bbox(
+                    self._fval(child.get("rmin", "0")) * u,
+                    self._fval(child.get("rmax", "0")) * u,
+                    self._fval(child.get("z", "0")) * u / 2, phi0, dphi)
             elif child.tag == "torus":
                 phi0 = self._fval(child.get("startphi", "0")) * au
                 dphi = self._fval(child.get("deltaphi", str(2 * np.pi / au))) * au
-                rmax = self._fval(child.get("rmax", "0")) * u
-                rtor = self._fval(child.get("rtor", "0")) * u
-                if rtor >= rmax:
-                    # the cross-section at angle phi spans radii rtor ± rmax
-                    # along (cos phi, sin phi): in x–y the torus covers the
-                    # annular sector of a tube with those radii
-                    pts = np.vstack([_arc_points(rtor - rmax, phi0, dphi),
-                                     _arc_points(rtor + rmax, phi0, dphi)])
-                else:
-                    # self-intersecting torus: pad the centre arc by rmax
-                    arc = _arc_points(rtor, phi0, dphi)
-                    pts = np.vstack([arc - rmax, arc + rmax])
-                self._prims[name] = self._aabb(pts, -rmax, rmax)
+                self._prims[name] = torus_bbox(
+                    self._fval(child.get("rtor", "0")) * u,
+                    self._fval(child.get("rmax", "0")) * u, phi0, dphi)
         for child in solids:
             if child.tag in ("subtraction", "union", "intersection"):
                 first  = child.find("first")
@@ -390,12 +410,6 @@ class GDMLGeometry(GeometryBase):
                     self._bools[child.get("name", "")] = (
                         child.tag, first.get("ref", ""), second.get("ref", ""), pos, rot,
                         np.zeros(3), np.eye(3))
-
-    @staticmethod
-    def _aabb(xy: np.ndarray, z0: float, z1: float) -> tuple:
-        lo = np.array([xy[:, 0].min(), xy[:, 1].min(), z0])
-        hi = np.array([xy[:, 0].max(), xy[:, 1].max(), z1])
-        return (lo + hi) / 2, hi - lo
 
     def _parse_transform(self, elem) -> tuple:
         """(pos, rot) from the position/rotation children of a physvol or boolean."""
@@ -463,7 +477,7 @@ class GDMLGeometry(GeometryBase):
                 self._world = world.get("ref")
 
 
-BACKENDS = ("python", "root")
+BACKENDS = ("python", "root", "pyg4ometry")
 
 
 def load_geometry(path: str, backend: str = "python",
@@ -474,4 +488,7 @@ def load_geometry(path: str, backend: str = "python",
     if backend == "root":
         from ._gdml_root import RootGDMLGeometry
         return RootGDMLGeometry(path, verbose=verbose)
+    if backend == "pyg4ometry":
+        from ._gdml_pyg4 import Pyg4GDMLGeometry
+        return Pyg4GDMLGeometry(path, verbose=verbose)
     raise ValueError(f"unknown GDML backend {backend!r}; choose from {BACKENDS}")

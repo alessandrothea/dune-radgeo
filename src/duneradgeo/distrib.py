@@ -43,9 +43,11 @@ from ._select import select_volumes, validate_picks
 from ._style import import_mpl
 
 _NPTS       = 100001
-_EFF_COL    = "tab:orange"
-_CURVE_COL  = "tab:blue"        # as generated (TF1::GetRandom)
-_FORMULA_COL = "0.1"            # the formula
+# _GEN_EFF_COL    = "tab:orange"
+_GEN_EFF_COL    = "tab:blue"
+_GEN_CURVE_COL  = "tab:blue"        # as generated (TF1::GetRandom)
+# _FORMULA_COL = "0.1"            # the formula
+_FORMULA_COL = "tab:red"            # the formula
 
 
 @dataclass
@@ -432,12 +434,14 @@ def _mono_size(lines: list[str], fig, x0: float, base: float,
 def _plot_pdf(ax, pr: Profile, g: DistribGroup, log: bool, legend: bool) -> None:
     c = f"{100 * g.containment:g}%"
     ax.plot(pr.x, pr.formula, color=_FORMULA_COL, lw=1.4, label="formula (TF1::Eval)")
-    ax.plot(pr.x, pr.generated, color=_CURVE_COL, lw=1.8, alpha=0.9,
+    ax.plot(pr.x, pr.generated, color=_GEN_CURVE_COL, lw=1.8, alpha=0.9,
             label=f"as generated (TF1::GetRandom, Npx={g.npx})")
-    ax.axvspan(*g.eff, color=_EFF_COL, alpha=0.22, lw=0,
+    ax.axvspan(*g.eff, color=_GEN_EFF_COL, alpha=0.22, lw=0,
                label=f"effective range, as generated ({c})")
     for e in g.eff:
-        ax.axvline(e, color=_EFF_COL, lw=1.0, ls="--")
+        ax.axvline(e, color=_GEN_EFF_COL, lw=1.0, ls="--")
+    ax.axvspan(*g.formula_eff, color=_FORMULA_COL, alpha=0.22, lw=0,
+               label=f"formula effective range")
     for k, e in enumerate(g.formula_eff):
         ax.axvline(e, color=_FORMULA_COL, lw=1.0, ls=":",
                    label=f"effective range of the formula ({c})" if k == 0 else None)
