@@ -67,7 +67,6 @@ pip install --no-deps . numpy click rich
 | `matplotlib` | `radgeo plot` and `radgeo profiles` PDF/PNG output, `plot_ir` |
 | `plotly` | `make_figure` |
 | `jupyter`, `nbconvert` | `nb_B.ipynb`, `scripts/run_notebook.py` |
-| `pyg4ometry` (extra) | `radgeo extract --gdml-backend pyg4ometry`: `pip install ".[pyg4ometry]"` or `uv sync --extra pyg4ometry`; about 1 GB with VTK, see [GDML backends](docs/radgeo-extract.md#gdml-backends) |
 | `root` (group) | `distrib_*` formulas: `radgeo extract` of producers with `distrib_*`, `radgeo profiles`, `tests/test_tf1.py`.  `radgeo extract --gdml-backend root` and `scripts/compare_backends.py` need a ROOT with TGeo/GDML (dunesw) |
 
 `radgeo plot --list` / `-L` and `radgeo profiles --list` need no matplotlib.  In a

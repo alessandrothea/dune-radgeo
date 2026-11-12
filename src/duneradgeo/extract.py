@@ -25,8 +25,7 @@ VD GDMLs nest the cryostat differently (a global offset), so their IRs in
 the frame of volEnclosureTPC overlay.  --with-passive adds the profile's
 passive material (steel shell, insulation, support, shielding, cavern) as
 struct volumes.  --gdml-backend root reads the GDML with ROOT
-(TGeoManager::Import), pyg4ometry with the pyg4ometry package;
-scripts/compare_ir.py compares the IRs of two backends.
+(TGeoManager::Import); scripts/compare_ir.py compares the two backends' IRs.
 
 Non-box solids become boxes: tubes and tori their bounding box, unions one
 box per primitive operand (e.g. each straight tube and corner of a
@@ -333,10 +332,9 @@ class _Args:
               help="override GDML path (when input is FCL)")
 @click.option("--gdml-backend", type=click.Choice(list(BACKENDS)), default="python",
               show_default=True,
-              help="GDML reader: the pure-Python parser, ROOT's "
+              help="GDML reader: the pure-Python parser, or ROOT's "
                    "TGeoManager::Import (needs ROOT with TGeo/GDML, "
-                   "e.g. in the dunesw container), or pyg4ometry "
-                   "(optional extra)")
+                   "e.g. in the dunesw container)")
 @click.option("--fcl-cache", default=default_fcl_cache_dir(), metavar="DIR",
               show_default=True,
               help="directory where expanded FCL files are cached and "

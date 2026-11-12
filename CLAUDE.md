@@ -26,29 +26,26 @@ Scripts: `scripts/compare_backends.py` (compare two GDML backends),
   boxes) and the pure-Python `GDMLGeometry` parser; `load_geometry(path,
   backend=...)`.  Tables a backend fills (`_vols`, `_prims`, `_bools`,
   `_boxes`, `_shape_bbox`, `_world`) are documented on `GeometryBase`; lengths in cm.
-- GDML backends (`BACKENDS`): `python` (default, numpy only, ~0.1 s),
-  `root` (`_gdml_root.py`, TGeoManager::Import, needs ROOT with TGeo/GDML),
-  `pyg4ometry` (`_gdml_pyg4.py`, optional extra, ~8 s, evaluates constants and
-  expressions the built-in parser cannot).
+- GDML backends (`BACKENDS`): `python` (default, numpy only, ~0.1 s) and
+  `root` (`_gdml_root.py`, TGeoManager::Import, needs ROOT with TGeo/GDML).
+  A pyg4ometry backend (evaluates constants and expressions the built-in
+  parser cannot) was tried and archived on the local branch
+  `archive/pyg4ometry` (commit e01ae0b): too much weight for now.
 - `_fcl.py`: FHiCL parser and `producer_volumes` (radio boxes, `volume_rand` /
   `volume_gen`).  `_profiles.py`: detector profiles (name patterns per kind).
   `_search.py`: FCL → GDML path search.  `_root.py`: shared lazy PyROOT import
   (`ROOTUnavailable`).  `_select.py`, `_style.py`, `_draw.py`, `_cli.py`: shared helpers.
-- `examples/gdml/`: three VD GDMLs used by tests.
 - `docs/`: one page per command; the `--help` text is pasted into it and checked.
 
 ## Conventions worth knowing
 
 - Physvols are placed with the inverse of the GDML rotation (`rot.T`); boolean
   operands use it directly (see `_gdml.py`).  All backends follow this.
-- ROOT and pyg4ometry are imported lazily; the package must work without them.
-  Features that need them raise `ROOTUnavailable` / `Pyg4ometryUnavailable`
-  (both `RuntimeError`), which the commands print as `[error] …`, exit 1.
-- pyg4ometry imports `vtk` at package import; `_gdml_pyg4._import_pyg4ometry`
-  supplies a placeholder module when vtk is missing.
+- ROOT is imported lazily; the package must work without it.  Features that
+  need it raise `ROOTUnavailable` (a `RuntimeError`), which the commands print
+  as `[error] …`, exit 1.
 - Dependencies stay light: `radgeo extract` needs only numpy, click, rich.
-  `root` is a uv dependency *group* (Python ≥ 3.14 host venv), pyg4ometry a
-  package *extra*.
+  `root` is a uv dependency *group* (Python ≥ 3.14 host venv).
 
 ## Tests
 
@@ -57,7 +54,6 @@ uv run pytest -q tests          # or: python tests/test_x.py (each file self-run
 ```
 
 - `tests/test_tf1.py` needs PyROOT and fails without it.
-- `tests/test_gdml_pyg4.py` is skipped without pyg4ometry (about 30 s with it).
 - `tests/test_docs.py` fails when a command's `--help` changes without
   updating its docs page; regenerate with
   `env XDG_CACHE_HOME=/home/user/.cache python tests/test_docs.py --print "radgeo extract"`
