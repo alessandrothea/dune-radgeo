@@ -145,6 +145,11 @@ class RootGDMLGeometry(GeometryBase):
             dname = node.GetVolume().GetName()
             pos, rot = _matrix(node.GetMatrix())
             daughters.append((dname, pos, rot, self._pv_name(node, dname)))
+        mat = vol.GetMaterial()
+        if mat:
+            self._vol_material[vol.GetName()] = mat.GetName()
+            # TGeoMaterial density is in g/cm3
+            self._densities[mat.GetName()] = float(mat.GetDensity())
         self._vols[vol.GetName()] = {
             "solid": shape.GetName() if shape else None,
             "daughters": daughters,

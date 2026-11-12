@@ -44,6 +44,22 @@ def _arc_points(r: float, phi0: float, dphi: float) -> np.ndarray:
         phis = np.concatenate([[phi0, phi0 + dphi], quads])
     return r * np.column_stack([np.cos(phis), np.sin(phis)])
 
+_MASS_UNIT = {"g": 1.0, "mg": 1e-3, "kg": 1e3, "ug": 1e-6}               # → g
+_VOLUME_UNIT = {"cm3": 1.0, "mm3": 1e-3, "m3": 1e6, "dm3": 1e3, "l": 1e3}  # → cm3
+
+
+def density_factor(unit: str) -> float | None:
+    """Factor of a GDML density unit (``g/cm3``, ``kg/m3``, …) to g/cm3, or
+    None when the unit is not understood.  GDML's default is g/cm3."""
+    unit = unit.strip().lower().replace(" ", "")
+    if not unit:
+        return 1.0
+    mass, sep, vol = unit.partition("/")
+    if not sep or mass not in _MASS_UNIT or vol not in _VOLUME_UNIT:
+        return None
+    return _MASS_UNIT[mass] / _VOLUME_UNIT[vol]
+
+
 def _placed_aabb(bbox: tuple, pos: np.ndarray, rot: np.ndarray) -> tuple:
     """(lo, hi) of box `bbox` = (centre, ext) mapped by x -> rot @ x + pos:
     the envelope of its 8 corners."""
@@ -75,6 +91,11 @@ class GeometryBase:
         solid → ``(centre, ext)``, its local bounding box as the reader
         computed it (the ROOT backend: ROOT's own, for every shape).  Solids
         not listed get theirs from :meth:`solid_bbox`.
+    ``_vol_material``
+        logical volume → name of its material (volumes without one are absent).
+    ``_densities``
+        material → density [g/cm3] (materials without a density, e.g. NIST
+        ones that the GDML does not define, are absent).
     ``_world``
         name of the world volume.
     """
@@ -87,6 +108,8 @@ class GeometryBase:
         self._bools: dict[str, tuple]      = {}
         self._vols:  dict[str, dict]       = {}
         self._world: str | None            = None
+        self._vol_material: dict[str, str]  = {}
+        self._densities: dict[str, float]   = {}
         self._shape_bbox: dict[str, tuple] = {}
 
     # -- tree search -------------------------------------------------------
@@ -208,6 +231,15 @@ class GeometryBase:
                       for n, c, r, e in self.solid_parts(second, seen)]
         return parts
 
+    def volume_material(self, vol_name: str) -> str | None:
+        """Name of the material of logical volume `vol_name`, or None."""
+        return self._vol_material.get(vol_name)
+
+    def volume_density(self, vol_name: str) -> float | None:
+        """Density [g/cm3] of the material of logical volume `vol_name`, or
+        None when the volume has no material or the material no density."""
+        return self._densities.get(self._vol_material.get(vol_name))
+
     def volume_parts(self, vol_name: str) -> list[tuple]:
         """:meth:`solid_parts` of the solid of logical volume `vol_name`."""
         vol = self._vols.get(vol_name)
@@ -282,6 +314,7 @@ class GDMLGeometry(GeometryBase):
         self._rots:  dict[str, np.ndarray] = {}   # named rotations (3×3)
 
         self._parse_defines(root)
+        self._parse_materials(root)
         self._parse_solids(root)
         self._parse_structure(root)
         self._parse_setup(root)
@@ -339,6 +372,29 @@ class GDMLGeometry(GeometryBase):
                     self._fval(child.get("y", "0")) * u,
                     self._fval(child.get("z", "0")) * u,
                 )
+
+    def _parse_materials(self, root):
+        """Material densities, in g/cm3; a material without a readable <D>
+        has none."""
+        materials = root.find("materials")
+        if materials is None:
+            return
+        for mat in materials.findall("material"):
+            d = mat.find("D")
+            if d is None or not mat.get("name"):
+                continue
+            factor = density_factor(d.get("unit", ""))
+            if factor is None:
+                print(f"  [warn] material {mat.get('name')}: density unit "
+                      f"{d.get('unit')!r} not understood, density skipped",
+                      file=sys.stderr)
+                continue
+            try:
+                self._densities[mat.get("name")] = self._fval(d.get("value", "")) * factor
+            except (SyntaxError, ValueError, TypeError):
+                print(f"  [warn] material {mat.get('name')}: density "
+                      f"{d.get('value')!r} not understood, density skipped",
+                      file=sys.stderr)
 
     def _parse_solids(self, root):
         solids = root.find("solids")
@@ -449,6 +505,8 @@ class GDMLGeometry(GeometryBase):
             for child in vol:
                 if child.tag == "solidref":
                     solid = child.get("ref")
+                elif child.tag == "materialref":
+                    self._vol_material[name] = child.get("ref")
                 elif child.tag == "physvol":
                     vref, pos, rot, pvname = self._parse_physvol(child)
                     if vref:

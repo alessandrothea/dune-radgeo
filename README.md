@@ -234,7 +234,8 @@ be here:
       "pos":  [325.08, -505.10, 148.92],
       "ext":  [0.01, 335.40, 297.84],
       "rot":  [[1,0,0],[0,1,0],[0,0,1]],
-      "meta": {"path": "volDetEnclosure:0/volCryostat:0/volAnodePlate:0"}
+      "meta": {"path": "volDetEnclosure:0/volCryostat:0/volAnodePlate:0",
+               "material": "vm2000", "density": 1.2}
     },
     {
       "kind": "radio",
@@ -260,7 +261,14 @@ be here:
 | `pos`  | centre `[x, y, z]` in cm, in the IR frame |
 | `ext`  | full extents `[dx, dy, dz]` in cm |
 | `rot`  | 3×3 rotation matrix in the IR frame |
-| `meta` | kind-specific metadata: GDML placement `path` for geometry volumes (see [Picking individual placements](docs/radgeo-plot.md#picking-individual-placements)) and, when the GDML names its physvols (ggd), the physvol name `pv` and the physvol names along the path `pvpath` (`placeDetEnclosure/…/volTPC_PV_Bot0/volTPCPlaneU_PV`); nuclide, BqPercc, surface, index, … for radio |
+| `meta` | kind-specific metadata: GDML placement `path` for geometry volumes (see [Picking individual placements](docs/radgeo-plot.md#picking-individual-placements)) and, when the GDML names its physvols (ggd), the physvol name `pv` and the physvol names along the path `pvpath` (`placeDetEnclosure/…/volTPC_PV_Bot0/volTPCPlaneU_PV`); the volume's GDML `material` name and its `density` in g/cm3 (each only when the GDML gives it); nuclide, BqPercc, surface, index, … for radio |
+
+`meta.density` is in g/cm3: the `<D>` of the volume's `<material>`, converted
+from its unit (`g/cm3` when the GDML gives none).  It is absent, with a
+warning, when the unit is not a mass/volume one, and also for a material the
+GDML only names (e.g. a NIST `G4_…` material), which has no `<material>`
+element.  The built-in parser does not evaluate GDML `<constant>`s: a density
+that uses one is skipped with a warning (`--gdml-backend root` evaluates it).
 
 For radio entries, `meta` also holds, for each axis with a `distrib_<axis>`
 formula: the formula, `distrib_<axis>_range` (the full box range it is

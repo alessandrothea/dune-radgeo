@@ -30,6 +30,13 @@ from duneradgeo import _root, extract  # noqa: E402
 # volume of the world.  volAnodePlate is the hint of the "vd-perl" profile.
 _GDML = """<?xml version="1.0"?>
 <gdml>
+ <materials>
+  <element name="Al" formula="Al" Z="13"><atom value="26.98"/></element>
+  <material name="Alu" Z="13"><D value="2.699" unit="g/cm3"/><atom value="26.98"/></material>
+  <material name="Steel" Z="26"><D value="7850" unit="kg/m3"/><atom value="55.8"/></material>
+  <material name="LAr" Z="18"><D value="1.396"/><atom value="39.95"/></material>
+  <material name="Odd" Z="1"><D value="3" unit="furlong"/><atom value="1"/></material>
+ </materials>
  <solids>
   <box name="World" x="100000" y="100000" z="100000" lunit="mm"/>
   <box name="Enc" x="4000" y="4000" z="4000" lunit="mm"/>
@@ -40,13 +47,13 @@ _GDML = """<?xml version="1.0"?>
   <box name="Shell" x="8000" y="8000" z="8000" lunit="mm"/>
  </solids>
  <structure>
-  <volume name="volAnodePlate"><solidref ref="Anode"/></volume>
+  <volume name="volAnodePlate"><materialref ref="Alu"/><solidref ref="Anode"/></volume>
   <volume name="volArapuca_0"><solidref ref="Arapuca"/></volume>
   <volume name="volArapuca_1"><solidref ref="Arapuca"/></volume>
-  <volume name="volCathodeGrid"><solidref ref="Cathode"/></volume>
-  <volume name="volExtra"><solidref ref="Extra"/></volume>
-  <volume name="volSteelShell"><solidref ref="Shell"/></volume>
-  <volume name="volEnclosureTPC"><solidref ref="Enc"/>
+  <volume name="volCathodeGrid"><materialref ref="G4_Cu"/><solidref ref="Cathode"/></volume>
+  <volume name="volExtra"><materialref ref="Odd"/><solidref ref="Extra"/></volume>
+  <volume name="volSteelShell"><materialref ref="Steel"/><solidref ref="Shell"/></volume>
+  <volume name="volEnclosureTPC"><materialref ref="LAr"/><solidref ref="Enc"/>
    <physvol><volumeref ref="volAnodePlate"/>
     <position name="pa" x="-1000" y="0" z="0" unit="mm"/></physvol>
    <physvol><volumeref ref="volArapuca_0"/>
@@ -161,6 +168,33 @@ def test_gdml_to_ir_and_summary_table():
         assert "[info] detected VD (Vertical Drift), perl GDML  (profile vd-perl)" in err
         assert "[info] 2/2 opdet placements" in err
         assert f"[info] wrote 4 volume entries to {out}" in err
+
+
+def test_material_and_density_in_meta():
+    """meta.material / meta.density [g/cm3] of every geometry entry that has them."""
+    with workdir() as (tmp, put):
+        gdml, out = put("g.gdml", _GDML), os.path.join(tmp, "ir.json")
+        res = run(gdml, "--out", out, "--with-passive", "--struct-pattern", "volExtra")
+        assert res.exit_code == 0, res.output
+        meta = {v["name"]: v["meta"] for v in load(out)["volumes"]}
+    assert meta["volAnodePlate"]["material"] == "Alu"
+    assert meta["volAnodePlate"]["density"] == 2.699
+    assert meta["volSteelShell"]["material"] == "Steel"
+    assert abs(meta["volSteelShell"]["density"] - 7.85) < 1e-12      # 7850 kg/m3
+    assert meta["volCathodeGrid"]["material"] == "G4_Cu"             # undefined: no density
+    assert "density" not in meta["volCathodeGrid"]
+    assert "material" not in meta["volArapuca_0"]                    # no materialref
+    assert "density" not in meta["volArapuca_0"]
+    assert meta["volExtra"]["material"] == "Odd" and "density" not in meta["volExtra"]
+    assert "density unit 'furlong' not understood" in err_of(res)
+
+
+def test_density_units():
+    from duneradgeo._gdml import density_factor
+    assert density_factor("") == 1.0 and density_factor("g/cm3") == 1.0
+    assert density_factor("kg/m3") == 1e-3 and density_factor("mg/cm3") == 1e-3
+    assert density_factor("g / mm3") == 1e3
+    assert density_factor("furlong") is None and density_factor("kg") is None
 
 
 def test_short_out_flag_and_help():

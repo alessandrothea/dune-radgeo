@@ -119,12 +119,17 @@ def _gdml_volumes(gdml_path: Path,
                 _cli.warn(f"no box/tube/torus solid for {kind} {name}, skipping")
                 continue
             copy = copies[name] = copies.get(name, -1) + 1
+            material, density = geo.volume_material(name), geo.volume_density(name)
             boxes = []
             for part, centre, prot, ext in parts:
                 wpos, wrot = pos + rot @ centre, rot @ prot
                 # multi-part volumes: tag each box with its solid and placement
                 meta = {"part": part, "copy": copy} if len(parts) > 1 else {}
                 meta["path"] = path
+                if material is not None:
+                    meta["material"] = material
+                if density is not None:
+                    meta["density"] = density
                 if pvname:
                     meta["pv"] = pvname
                 if pvpath:

@@ -14,6 +14,7 @@ Examples:
 For each file both backends are loaded and compared on
 
   * the logical volume names and the world volume;
+  * the material name and density of every volume;
   * the solid tables: primitive bounding boxes (centre, extents), box
     extents and boolean operands with their placements;
   * every placement matched by the detector profile's patterns (anode,
@@ -68,6 +69,19 @@ class _Report:
 
 def _maxdiff(a, b) -> float:
     return float(np.abs(np.asarray(a, float) - np.asarray(b, float)).max())
+
+
+def _cmp_materials(py, rt, rep: _Report) -> None:
+    """Material name and density [g/cm3] of every logical volume."""
+    bad = []
+    for n in sorted(py.volume_names & rt.volume_names):
+        ma, mb = py.volume_material(n), rt.volume_material(n)
+        da, db = py.volume_density(n), rt.volume_density(n)
+        same_d = (da is None and db is None) or (
+            da is not None and db is not None and abs(da - db) <= 1e-6 * max(abs(da), abs(db)))
+        if ma != mb or not same_d:
+            bad.append(f"{n}: python {ma} {da}  root {mb} {db}")
+    rep.line(not bad, "materials", f"{len(bad)} differ", bad)
 
 
 def _cmp_solids(py, rt, rep: _Report, tol: float, rot_tol: float) -> None:
@@ -168,6 +182,7 @@ def compare(path: str, patterns: list[str] | None, tol: float, rot_tol: float,
              f"n={len(va)}/{len(vb)}  world {py._world}/{rt._world}",
              [f"only in python: {n}" for n in sorted(va - vb)]
              + [f"only in root: {n}" for n in sorted(vb - va)])
+    _cmp_materials(py, rt, rep)
     _cmp_solids(py, rt, rep, tol, rot_tol)
 
     if patterns:
